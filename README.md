@@ -11,16 +11,18 @@ cargo run -- wallet --help
 
 ## Storage layout
 
-By default, wallets are stored under your OS config directory (for example, `~/Library/Application Support/casper-cli` on macOS). You can override the base path for all wallet commands with `--wallet-path`:
+By default, wallets are stored under your OS config directory (for example, `~/Library/Application Support/casper-cli` on macOS). You can configure the secret storage backend in `config.toml`:
 
 ```bash
-cargo run -- --wallet-path /tmp/casper-wallets wallet list
+cargo run -- config edit
 ```
 
-The layout under the base directory:
+The layout under the base directory (file storage backend):
 
 - `wallets/<name>.json` - wallet metadata (accounts, type, encryption flag)
 - `secrets/<name>.enc` - encrypted wallet root secret
+
+When using `storage.type = "keyring"`, secrets are stored in the OS keyring instead of the `secrets/` directory, the CLI does not prompt for a master password, and `--unencrypted` is not supported.
 
 ## Wallet commands
 
@@ -38,7 +40,7 @@ Seeded (deterministic) wallets:
 cargo run -- wallet create mywallet --seed "my-seed" --domain "my-domain"
 ```
 
-Unencrypted (unsafe, for local dev only):
+Unencrypted (unsafe, for local dev only, file storage only):
 
 ```bash
 cargo run -- wallet create mywallet --unencrypted
@@ -131,6 +133,13 @@ Networks are stored in `config.toml` under the same config directory as wallets.
 ```toml
 active = "devnet"
 
+[storage]
+type = "file"
+root_path = "/Users/you/Library/Application Support/casper-cli"
+
+# Or use the OS keyring (service name is always "casper-cli")
+# type = "keyring"
+
 [networks.devnet]
 chain_name = "casper-dev"
 rest = "http://127.0.0.1:14102"
@@ -157,11 +166,12 @@ cargo run -- network list
 
 ## Balance command
 
-Fetches the balance for a wallet account or a raw public key hex. The active network is read from `config.toml`.
+Fetches the balance for a wallet account, account hash hex, or a raw public key hex. The active network is read from `config.toml`.
 
 ```bash
 cargo run -- balance mywallet:account-0
 cargo run -- balance 0202c1...deadbeef
+cargo run -- balance <account-hash-hex>
 ```
 
 ## Config commands
@@ -183,4 +193,4 @@ Wallet secrets are encrypted at rest by default:
 - The wallet name is bound as AAD during encryption to prevent file-renaming attacks.
 - Secret files are written atomically and locked down to restrictive permissions (0600 files, 0700 directories on Unix).
 
-You can opt out of encryption with `--unencrypted` for local dev workflows, but this stores secrets in plaintext.
+You can opt out of encryption with `--unencrypted` for local dev workflows when using file storage, but this stores secrets in plaintext.

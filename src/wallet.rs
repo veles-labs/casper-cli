@@ -1,3 +1,6 @@
+use crate::secure_storage::keyring;
+use crate::secure_storage::{RootSecret, SecureStorage, StorageBackendKind, StoreMode};
+use crate::storage::StorageConfig;
 use anyhow::{Context, Result, anyhow, bail};
 use bip32::{DerivationPath, Language, Mnemonic, XPrv};
 use blake2::Blake2bVar;
@@ -8,13 +11,8 @@ use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use zeroize::Zeroizing;
-
-use crate::secure_storage::file::FileSecureStorage;
-use crate::secure_storage::{RootSecret, SecureStorage, StorageAuth};
 
 const WALLET_DIR_NAME: &str = "wallets";
-const SECRETS_DIR_NAME: &str = "secrets";
 const DEFAULT_PATH_PREFIX: &str = "m/44'/506'/0'/0";
 
 #[derive(Args)]
@@ -131,10 +129,9 @@ pub struct RenameArgs {
 struct WalletMetadata {
     version: u8,
     name: String,
-    #[serde(default = "default_encrypted")]
+    storage: StorageBackendKind,
     encrypted: bool,
     wallet_type: WalletType,
-    #[serde(default = "default_domain")]
     domain: String,
     accounts: Vec<DerivedAccount>,
 }
@@ -154,30 +151,30 @@ struct DerivedAccount {
     public_key: String,
 }
 
-pub fn handle(wallet_path_override: &Option<PathBuf>, args: WalletArgs) -> Result<()> {
+pub fn handle(storage: &StorageConfig, args: WalletArgs) -> Result<()> {
     match args.command {
-        WalletCommand::Create(command) => create_wallet(wallet_path_override, command),
-        WalletCommand::Recover(command) => recover_wallet(wallet_path_override, command),
-        WalletCommand::List => wallet_list(wallet_path_override),
-        WalletCommand::Info(command) => wallet_info(wallet_path_override, command),
-        WalletCommand::Derive(command) => wallet_derive(wallet_path_override, command),
-        WalletCommand::Add(command) => wallet_add(wallet_path_override, command),
-        WalletCommand::RenameAccount(command) => wallet_rename(wallet_path_override, command),
-        WalletCommand::Delete(command) => wallet_delete(wallet_path_override, command),
-        WalletCommand::External(command) => wallet_external(wallet_path_override, command),
+        WalletCommand::Create(command) => create_wallet(storage, command),
+        WalletCommand::Recover(command) => recover_wallet(storage, command),
+        WalletCommand::List => wallet_list(storage),
+        WalletCommand::Info(command) => wallet_info(storage, command),
+        WalletCommand::Derive(command) => wallet_derive(storage, command),
+        WalletCommand::Add(command) => wallet_add(storage, command),
+        WalletCommand::RenameAccount(command) => wallet_rename(storage, command),
+        WalletCommand::Delete(command) => wallet_delete(storage, command),
+        WalletCommand::External(command) => wallet_external(storage, command),
     }
 }
 
 pub fn resolve_account_public_key(
-    wallet_path_override: &Option<PathBuf>,
+    storage: &StorageConfig,
     wallet_name: &str,
     account_name: &str,
 ) -> Result<String> {
-    let paths = storage_paths(wallet_path_override, wallet_name)?;
-    if !paths.metadata_path.exists() {
+    let storage = wallet_storage(storage, wallet_name)?;
+    if !storage.metadata_path.exists() {
         bail!("wallet '{}' does not exist; create it first", wallet_name);
     }
-    let metadata = load_metadata(&paths.metadata_path)?;
+    let metadata = load_metadata(&storage.metadata_path)?;
     for account in &metadata.accounts {
         if account.name == account_name {
             return Ok(account.public_key.clone());
@@ -190,15 +187,15 @@ pub fn resolve_account_public_key(
     );
 }
 
-fn create_wallet(wallet_path_override: &Option<PathBuf>, args: CreateArgs) -> Result<()> {
-    let paths = storage_paths(wallet_path_override, &args.name)?;
-    let storage = FileSecureStorage::new(paths.secrets_dir.clone());
-    ensure_wallet_absent(&storage, &paths, &args.name)?;
-    let auth = if args.unencrypted {
-        warn_unencrypted_wallet();
-        StorageAuth::None
+fn create_wallet(storage: &StorageConfig, args: CreateArgs) -> Result<()> {
+    let wallet_storage = wallet_storage(storage, &args.name)?;
+    ensure_unencrypted_allowed(wallet_storage.storage.as_ref(), args.unencrypted)?;
+    ensure_wallet_absent(&wallet_storage, &args.name)?;
+    let uses_master_password = wallet_storage.storage.uses_master_password();
+    let store_mode = if args.unencrypted {
+        StoreMode::Unencrypted
     } else {
-        prompt_master_password(true)?
+        StoreMode::Encrypted
     };
 
     let using_seed = args.seed.is_some() || args.domain.is_some();
@@ -229,37 +226,44 @@ fn create_wallet(wallet_path_override: &Option<PathBuf>, args: CreateArgs) -> Re
     };
 
     let (wallet_type, domain) = wallet_type_from_secret(&root_secret);
+    let encrypted = if uses_master_password {
+        !args.unencrypted
+    } else {
+        true
+    };
     let metadata = WalletMetadata {
         version: 1,
         name: args.name.clone(),
-        encrypted: !args.unencrypted,
+        storage: wallet_storage.storage.backend_kind(),
+        encrypted,
         wallet_type,
         domain,
         accounts: Vec::new(),
     };
-    storage
-        .store(&args.name, &root_secret, &auth)
+    wallet_storage
+        .storage
+        .store(&args.name, &root_secret, store_mode)
         .map_err(|err| anyhow!(err.to_string()))?;
-    save_metadata(&paths.metadata_path, &metadata)?;
-    println!("Wallet saved to {}", paths.metadata_path.display());
+    save_metadata(&wallet_storage.metadata_path, &metadata)?;
+    println!("Wallet saved to {}", wallet_storage.metadata_path.display());
     Ok(())
 }
 
-fn recover_wallet(wallet_path_override: &Option<PathBuf>, args: RecoverArgs) -> Result<()> {
-    let paths = storage_paths(wallet_path_override, &args.name)?;
-    let storage = FileSecureStorage::new(paths.secrets_dir.clone());
-    ensure_wallet_absent(&storage, &paths, &args.name)?;
+fn recover_wallet(storage: &StorageConfig, args: RecoverArgs) -> Result<()> {
+    let wallet_storage = wallet_storage(storage, &args.name)?;
+    ensure_unencrypted_allowed(wallet_storage.storage.as_ref(), args.unencrypted)?;
+    ensure_wallet_absent(&wallet_storage, &args.name)?;
 
     let mnemonic_input = prompt_mnemonic()?;
     let mnemonic = Mnemonic::new(mnemonic_input, Language::English)
         .map_err(|_| anyhow!("invalid mnemonic"))?;
     let passphrase = prompt_passphrase("Enter optional BIP-39 passphrase: ")?;
 
-    let auth = if args.unencrypted {
-        warn_unencrypted_wallet();
-        StorageAuth::None
+    let uses_master_password = wallet_storage.storage.uses_master_password();
+    let store_mode = if args.unencrypted {
+        StoreMode::Unencrypted
     } else {
-        prompt_master_password(true)?
+        StoreMode::Encrypted
     };
 
     let root_secret = RootSecret::Bip39 {
@@ -268,74 +272,72 @@ fn recover_wallet(wallet_path_override: &Option<PathBuf>, args: RecoverArgs) -> 
     };
 
     let (wallet_type, domain) = wallet_type_from_secret(&root_secret);
+    let encrypted = if uses_master_password {
+        !args.unencrypted
+    } else {
+        true
+    };
     let metadata = WalletMetadata {
         version: 1,
         name: args.name.clone(),
-        encrypted: !args.unencrypted,
+        storage: wallet_storage.storage.backend_kind(),
+        encrypted,
         wallet_type,
         domain,
         accounts: Vec::new(),
     };
 
-    storage
-        .store(&args.name, &root_secret, &auth)
+    wallet_storage
+        .storage
+        .store(&args.name, &root_secret, store_mode)
         .map_err(|err| anyhow!(err.to_string()))?;
-    save_metadata(&paths.metadata_path, &metadata)?;
-    println!("Wallet saved to {}", paths.metadata_path.display());
+    save_metadata(&wallet_storage.metadata_path, &metadata)?;
+    println!("Wallet saved to {}", wallet_storage.metadata_path.display());
     Ok(())
 }
 
-fn wallet_list(wallet_path_override: &Option<PathBuf>) -> Result<()> {
-    let wallets_dir = wallets_dir(wallet_path_override)?;
-    if !wallets_dir.exists() {
+fn wallet_list(storage: &StorageConfig) -> Result<()> {
+    let metadata_dir = wallets_dir(storage)?;
+    let secret_storage = storage.secret_storage()?;
+    let mut names = secret_storage
+        .list()
+        .map_err(|err| anyhow!(err.to_string()))?;
+
+    if names.is_empty() {
         println!("No wallets found.");
         return Ok(());
     }
 
-    let mut entries = Vec::new();
-    for entry in fs::read_dir(&wallets_dir)
-        .with_context(|| format!("failed to read {}", wallets_dir.display()))?
-    {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-            continue;
-        }
-        let metadata = load_metadata(&path)?;
-        entries.push(metadata);
-    }
-
-    if entries.is_empty() {
-        println!("No wallets found.");
-        return Ok(());
-    }
-
-    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    names.sort();
 
     let mut table = Table::new();
     table.set_header(vec!["Name", "Encrypted", "Accounts"]);
-    for metadata in entries {
-        table.add_row(vec![
-            Cell::new(metadata.name),
-            Cell::new(metadata.encrypted),
-            Cell::new(metadata.accounts.len()),
-        ]);
+    for name in names {
+        let metadata_path = metadata_dir.join(format!("{name}.json"));
+        if metadata_path.exists() {
+            let metadata = load_metadata(&metadata_path)?;
+            table.add_row(vec![
+                Cell::new(metadata.name),
+                Cell::new(metadata.encrypted),
+                Cell::new(metadata.accounts.len()),
+            ]);
+        } else {
+            table.add_row(vec![
+                Cell::new(name),
+                Cell::new("unknown"),
+                Cell::new("unknown"),
+            ]);
+        }
     }
     println!("{table}");
 
     Ok(())
 }
 
-fn wallet_info(wallet_path_override: &Option<PathBuf>, args: InfoArgs) -> Result<()> {
-    let paths = storage_paths(wallet_path_override, &args.name)?;
-    let storage = FileSecureStorage::new(paths.secrets_dir.clone());
-    ensure_wallet_exists(&storage, &paths, &args.name)?;
-    let mut metadata = load_metadata(&paths.metadata_path)?;
-    let mut updated = false;
-    if metadata.domain == default_domain() && metadata.wallet_type == WalletType::Bip39 {
-        metadata.domain = "bip39".to_string();
-        updated = true;
-    }
+fn wallet_info(storage: &StorageConfig, args: InfoArgs) -> Result<()> {
+    let storage = wallet_storage(storage, &args.name)?;
+    ensure_wallet_exists(&storage, &args.name)?;
+    let mut metadata = load_metadata(&storage.metadata_path)?;
 
     match metadata.wallet_type {
         WalletType::Bip39 => {
@@ -363,21 +365,16 @@ fn wallet_info(wallet_path_override: &Option<PathBuf>, args: InfoArgs) -> Result
         println!("{table}");
     }
 
-    if updated {
-        save_metadata(&paths.metadata_path, &metadata)?;
-    }
-
     Ok(())
 }
 
-fn wallet_derive(wallet_path_override: &Option<PathBuf>, args: DeriveArgs) -> Result<()> {
-    let paths = storage_paths(wallet_path_override, &args.name)?;
-    let storage = FileSecureStorage::new(paths.secrets_dir.clone());
-    ensure_wallet_exists(&storage, &paths, &args.name)?;
-    let mut metadata = load_metadata(&paths.metadata_path)?;
-    let auth = auth_for_metadata(&metadata, false)?;
-    let root_secret = storage
-        .load(&args.name, &auth)
+fn wallet_derive(storage: &StorageConfig, args: DeriveArgs) -> Result<()> {
+    let wallet_storage = wallet_storage(storage, &args.name)?;
+    ensure_wallet_exists(&wallet_storage, &args.name)?;
+    let mut metadata = load_metadata(&wallet_storage.metadata_path)?;
+    let root_secret = wallet_storage
+        .storage
+        .load(&args.name)
         .map_err(|err| anyhow!(err.to_string()))?;
     let seed = root_seed(&root_secret)?;
 
@@ -415,7 +412,7 @@ fn wallet_derive(wallet_path_override: &Option<PathBuf>, args: DeriveArgs) -> Re
     }
 
     if updated {
-        save_metadata(&paths.metadata_path, &metadata)?;
+        save_metadata(&wallet_storage.metadata_path, &metadata)?;
     }
 
     if args.count > 0 {
@@ -425,14 +422,13 @@ fn wallet_derive(wallet_path_override: &Option<PathBuf>, args: DeriveArgs) -> Re
     Ok(())
 }
 
-fn wallet_add(wallet_path_override: &Option<PathBuf>, args: AddArgs) -> Result<()> {
-    let paths = storage_paths(wallet_path_override, &args.wallet_name)?;
-    let storage = FileSecureStorage::new(paths.secrets_dir.clone());
-    ensure_wallet_exists(&storage, &paths, &args.wallet_name)?;
-    let mut metadata = load_metadata(&paths.metadata_path)?;
-    let auth = auth_for_metadata(&metadata, false)?;
-    let root_secret = storage
-        .load(&args.wallet_name, &auth)
+fn wallet_add(storage: &StorageConfig, args: AddArgs) -> Result<()> {
+    let wallet_storage = wallet_storage(storage, &args.wallet_name)?;
+    ensure_wallet_exists(&wallet_storage, &args.wallet_name)?;
+    let mut metadata = load_metadata(&wallet_storage.metadata_path)?;
+    let root_secret = wallet_storage
+        .storage
+        .load(&args.wallet_name)
         .map_err(|err| anyhow!(err.to_string()))?;
 
     let next_index = metadata
@@ -470,7 +466,7 @@ fn wallet_add(wallet_path_override: &Option<PathBuf>, args: AddArgs) -> Result<(
         &path,
         &public_key_hex,
     );
-    save_metadata(&paths.metadata_path, &metadata)?;
+    save_metadata(&wallet_storage.metadata_path, &metadata)?;
 
     let mut table = Table::new();
     table.set_header(vec!["Name", "Path", "Public Key"]);
@@ -484,11 +480,10 @@ fn wallet_add(wallet_path_override: &Option<PathBuf>, args: AddArgs) -> Result<(
     Ok(())
 }
 
-fn wallet_rename(wallet_path_override: &Option<PathBuf>, args: RenameArgs) -> Result<()> {
-    let paths = storage_paths(wallet_path_override, &args.wallet_name)?;
-    let storage = FileSecureStorage::new(paths.secrets_dir.clone());
-    ensure_wallet_exists(&storage, &paths, &args.wallet_name)?;
-    let mut metadata = load_metadata(&paths.metadata_path)?;
+fn wallet_rename(storage: &StorageConfig, args: RenameArgs) -> Result<()> {
+    let storage = wallet_storage(storage, &args.wallet_name)?;
+    ensure_wallet_exists(&storage, &args.wallet_name)?;
+    let mut metadata = load_metadata(&storage.metadata_path)?;
 
     if args.new_name.is_empty() {
         bail!("new account name cannot be empty");
@@ -520,16 +515,16 @@ fn wallet_rename(wallet_path_override: &Option<PathBuf>, args: RenameArgs) -> Re
         bail!("account '{}' not found", args.old_name);
     }
 
-    save_metadata(&paths.metadata_path, &metadata)?;
+    save_metadata(&storage.metadata_path, &metadata)?;
     println!("Renamed account '{}' to '{}'", args.old_name, args.new_name);
     Ok(())
 }
 
-fn wallet_delete(wallet_path_override: &Option<PathBuf>, args: DeleteArgs) -> Result<()> {
-    let paths = storage_paths(wallet_path_override, &args.name)?;
-    let storage = FileSecureStorage::new(paths.secrets_dir.clone());
-    let metadata_exists = paths.metadata_path.exists();
+fn wallet_delete(storage: &StorageConfig, args: DeleteArgs) -> Result<()> {
+    let storage = wallet_storage(storage, &args.name)?;
+    let metadata_exists = storage.metadata_path.exists();
     let secret_exists = storage
+        .storage
         .exists(&args.name)
         .map_err(|err| anyhow!(err.to_string()))?;
     if !metadata_exists && !secret_exists {
@@ -537,9 +532,10 @@ fn wallet_delete(wallet_path_override: &Option<PathBuf>, args: DeleteArgs) -> Re
     }
 
     storage
+        .storage
         .delete(&args.name)
         .map_err(|err| anyhow!(err.to_string()))?;
-    match fs::remove_file(&paths.metadata_path) {
+    match fs::remove_file(&storage.metadata_path) {
         Ok(()) => {}
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => return Err(err.into()),
@@ -548,7 +544,7 @@ fn wallet_delete(wallet_path_override: &Option<PathBuf>, args: DeleteArgs) -> Re
     Ok(())
 }
 
-fn wallet_external(wallet_path_override: &Option<PathBuf>, args: Vec<String>) -> Result<()> {
+fn wallet_external(storage: &StorageConfig, args: Vec<String>) -> Result<()> {
     if args.len() >= 2 && args[1] == "add" {
         if args.len() == 3 && (args[2] == "--help" || args[2] == "-h") {
             print_wallet_add_help();
@@ -558,7 +554,7 @@ fn wallet_external(wallet_path_override: &Option<PathBuf>, args: Vec<String>) ->
             bail!("usage: casper wallet <wallet-name> add [account-name]");
         }
         return wallet_add(
-            wallet_path_override,
+            storage,
             AddArgs {
                 wallet_name: args[0].clone(),
                 account_name: args.get(2).cloned(),
@@ -574,7 +570,7 @@ fn wallet_external(wallet_path_override: &Option<PathBuf>, args: Vec<String>) ->
             bail!("usage: casper wallet <wallet-name> rename-account <old-name> <new-name>");
         }
         return wallet_rename(
-            wallet_path_override,
+            storage,
             RenameArgs {
                 wallet_name: args[0].clone(),
                 old_name: args[2].clone(),
@@ -591,7 +587,7 @@ fn wallet_external(wallet_path_override: &Option<PathBuf>, args: Vec<String>) ->
             bail!("usage: casper wallet <wallet-name> rename-account <old-name> <new-name>");
         }
         return wallet_rename(
-            wallet_path_override,
+            storage,
             RenameArgs {
                 wallet_name: args[0].clone(),
                 old_name: args[2].clone(),
@@ -616,60 +612,35 @@ fn print_wallet_rename_help() {
     println!("Renames an existing account in the wallet.");
 }
 
-struct StoragePaths {
+struct WalletStorage {
     metadata_path: PathBuf,
-    secrets_dir: PathBuf,
+    secret_location: String,
+    storage: Box<dyn SecureStorage>,
 }
 
-fn secret_path(secrets_dir: &Path, name: &str) -> PathBuf {
-    secrets_dir.join(format!("{}.enc", name))
-}
-
-fn storage_paths(override_path: &Option<PathBuf>, name: &str) -> Result<StoragePaths> {
+fn wallet_storage(storage: &StorageConfig, name: &str) -> Result<WalletStorage> {
     validate_wallet_name(name)?;
-    let base_dir = base_dir_from_override(override_path)?;
+    let base_dir = storage.base_dir()?;
     let metadata_path = base_dir
         .join(WALLET_DIR_NAME)
         .join(format!("{}.json", name));
-
-    Ok(StoragePaths {
+    let secret_location = storage.secret_location(name)?;
+    let secret_storage = storage.secret_storage()?;
+    Ok(WalletStorage {
         metadata_path,
-        secrets_dir: base_dir.join(SECRETS_DIR_NAME),
+        secret_location,
+        storage: secret_storage,
     })
 }
 
-fn base_dir_from_override(override_path: &Option<PathBuf>) -> Result<PathBuf> {
-    if let Some(path) = override_path {
-        let is_json = path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| ext.eq_ignore_ascii_case("json"))
-            .unwrap_or(false);
-        if is_json || path.is_file() {
-            return path
-                .parent()
-                .map(Path::to_path_buf)
-                .ok_or_else(|| anyhow!("wallet path has no parent directory"));
-        }
-        return Ok(path.clone());
-    }
-    Ok(dirs::config_dir()
-        .or_else(|| std::env::current_dir().ok())
-        .context("unable to determine config directory")?
-        .join("casper-cli"))
+fn wallets_dir(storage: &StorageConfig) -> Result<PathBuf> {
+    Ok(storage.base_dir()?.join(WALLET_DIR_NAME))
 }
 
-fn wallets_dir(override_path: &Option<PathBuf>) -> Result<PathBuf> {
-    Ok(base_dir_from_override(override_path)?.join(WALLET_DIR_NAME))
-}
-
-fn ensure_wallet_exists(
-    storage: &FileSecureStorage,
-    paths: &StoragePaths,
-    name: &str,
-) -> Result<()> {
-    let metadata_exists = paths.metadata_path.exists();
+fn ensure_wallet_exists(storage: &WalletStorage, name: &str) -> Result<()> {
+    let metadata_exists = storage.metadata_path.exists();
     let secret_exists = storage
+        .storage
         .exists(name)
         .map_err(|err| anyhow!(err.to_string()))?;
     if !metadata_exists && !secret_exists {
@@ -679,30 +650,68 @@ fn ensure_wallet_exists(
         bail!(
             "wallet '{}' metadata missing at {}",
             name,
-            paths.metadata_path.display()
+            storage.metadata_path.display()
         );
     }
     if !secret_exists {
         bail!(
             "wallet '{}' secret missing at {}",
             name,
-            secret_path(&paths.secrets_dir, name).display()
+            storage.secret_location
         );
     }
     Ok(())
 }
 
-fn ensure_wallet_absent(
-    storage: &FileSecureStorage,
-    paths: &StoragePaths,
-    name: &str,
-) -> Result<()> {
-    let metadata_exists = paths.metadata_path.exists();
+fn ensure_wallet_absent(storage: &WalletStorage, name: &str) -> Result<()> {
+    let metadata_exists = storage.metadata_path.exists();
+    let metadata = if metadata_exists {
+        Some(load_metadata(&storage.metadata_path)?)
+    } else {
+        None
+    };
     let secret_exists = storage
+        .storage
         .exists(name)
         .map_err(|err| anyhow!(err.to_string()))?;
-    if secret_exists || metadata_exists {
-        bail!("wallet '{}' already exists", name);
+    if metadata_exists && secret_exists {
+        let backend = metadata
+            .as_ref()
+            .map(|metadata| metadata.storage.as_str())
+            .unwrap_or("unknown");
+        bail!(
+            "wallet '{}' already exists (metadata storage: {})",
+            name,
+            backend
+        );
+    }
+    if metadata_exists && !secret_exists {
+        let backend = metadata
+            .as_ref()
+            .map(|metadata| metadata.storage.as_str())
+            .unwrap_or("unknown");
+        bail!(
+            "wallet '{}' metadata exists for {} storage at {}, but secret is missing at {}",
+            name,
+            backend,
+            storage.metadata_path.display(),
+            storage.secret_location
+        );
+    }
+    if !metadata_exists && secret_exists {
+        bail!(
+            "wallet '{}' secret exists at {}, but metadata is missing at {}",
+            name,
+            storage.secret_location,
+            storage.metadata_path.display()
+        );
+    }
+    Ok(())
+}
+
+fn ensure_unencrypted_allowed(storage: &dyn SecureStorage, requested: bool) -> Result<()> {
+    if requested && !storage.uses_master_password() {
+        bail!("--unencrypted is not supported with this storage backend");
     }
     Ok(())
 }
@@ -734,6 +743,9 @@ fn validate_wallet_name(name: &str) -> Result<()> {
     }
     if name.contains('/') || name.contains('\\') {
         bail!("wallet name cannot contain path separators");
+    }
+    if keyring::is_reserved_wallet_name(name) {
+        bail!("wallet name is reserved");
     }
     Ok(())
 }
@@ -770,14 +782,6 @@ fn add_account(
 
 fn default_account_name(index: u32) -> String {
     format!("account-{}", index)
-}
-
-fn default_encrypted() -> bool {
-    true
-}
-
-fn default_domain() -> String {
-    "unknown".to_string()
 }
 
 fn wallet_type_from_secret(secret: &RootSecret) -> (WalletType, String) {
@@ -833,23 +837,6 @@ fn prompt_passphrase(prompt: &str) -> Result<String> {
     Ok(passphrase)
 }
 
-fn prompt_master_password(confirm: bool) -> Result<StorageAuth> {
-    let password = rpassword::prompt_password("Enter master password: ")?;
-    if confirm {
-        let confirmation = rpassword::prompt_password("Confirm master password: ")?;
-        if password != confirmation {
-            bail!("master passwords do not match");
-        }
-    }
-    if password.is_empty() {
-        eprintln!("\x1b[1;31mWARNING: EMPTY MASTER PASSWORD\x1b[0m");
-        eprintln!("\x1b[1;33mSecrets will be stored with no protection.\x1b[0m");
-    } else if password.len() < 12 {
-        eprintln!("WARNING: master password is short; consider using 12+ characters.");
-    }
-    Ok(StorageAuth::Password(Zeroizing::new(password)))
-}
-
 fn prompt_mnemonic() -> Result<String> {
     let input = rpassword::prompt_password("Enter BIP-39 mnemonic: ")?;
     let normalized = input.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -857,20 +844,6 @@ fn prompt_mnemonic() -> Result<String> {
         bail!("mnemonic cannot be empty");
     }
     Ok(normalized)
-}
-
-fn auth_for_metadata(metadata: &WalletMetadata, confirm: bool) -> Result<StorageAuth> {
-    if metadata.encrypted {
-        prompt_master_password(confirm)
-    } else {
-        warn_unencrypted_wallet();
-        Ok(StorageAuth::None)
-    }
-}
-
-fn warn_unencrypted_wallet() {
-    eprintln!("\x1b[1;31mWARNING: UNENCRYPTED WALLET\x1b[0m");
-    eprintln!("\x1b[1;33mSecrets will be stored in plaintext.\x1b[0m");
 }
 
 fn warn_seeded_wallet(domain: &str) {

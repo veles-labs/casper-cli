@@ -2,69 +2,76 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use tokio::runtime::Runtime;
 
-use casper_types::{PublicKey, bytesrepr::deserialize_from_slice};
-use veles_casper_rust_sdk::jsonrpc::CasperClient;
+use casper_types::{PublicKey, U512, account::AccountHash, bytesrepr::deserialize_from_slice};
+use veles_casper_rust_sdk::jsonrpc::{AccountIdentifier, CasperClient};
 
 use crate::network;
+use crate::storage::StorageConfig;
 use crate::wallet;
 
 const MOTES_PER_CSPR: u64 = 1_000_000_000;
+const ACCOUNT_HASH_LEN: usize = 32;
 
 #[derive(Args)]
 /// Arguments for fetching an account balance.
 pub struct BalanceArgs {
-    /// Wallet/account reference (<wallet>:<account>) or public key hex.
+    /// Wallet/account reference (<wallet>:<account>), account hash hex, or public key hex.
     name: String,
 }
 
-pub fn handle(wallet_path_override: &Option<std::path::PathBuf>, args: BalanceArgs) -> Result<()> {
-    let public_key_hex = resolve_public_key_hex(wallet_path_override, &args.name)?;
+pub fn handle(storage: &StorageConfig, args: BalanceArgs) -> Result<()> {
+    let name = args.name;
+    let account_identifier = resolve_account_identifier(storage, &name)?;
     let (network_name, rpc_endpoint) = network::active_network_rpc()?;
 
-    let client = CasperClient::new(network_name, vec![rpc_endpoint])
-        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
-
     let runtime = Runtime::new().context("failed to start async runtime")?;
-    let balance = runtime
-        .block_on(client.get_balance(&public_key_hex))
-        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
 
-    match balance {
+    let result = runtime.block_on(async {
+        let client = CasperClient::new(rpc_endpoint);
+        client.get_balance(account_identifier).await
+    })?;
+
+    match result {
         Some(motes) => {
-            let cspr = format_cspr(motes);
-            println!("Balance: {cspr} CSPR");
-            println!("Motes: {motes}");
+            let cspr = format_cspr(&motes);
+            println!("Balance of {name} on {network_name}: {cspr} CSPR");
         }
         None => {
-            println!("No account found for public key {public_key_hex}");
+            println!("No account found on network {network_name}");
         }
     }
 
     Ok(())
 }
 
-fn resolve_public_key_hex(
-    wallet_path_override: &Option<std::path::PathBuf>,
-    input: &str,
-) -> Result<String> {
+fn resolve_account_identifier(storage: &StorageConfig, input: &str) -> Result<AccountIdentifier> {
     if let Some((wallet_name, account_name)) = input.split_once(':') {
         if wallet_name.is_empty() || account_name.is_empty() {
             bail!("wallet/account reference must be <wallet>:<account>");
         }
-        return wallet::resolve_account_public_key(wallet_path_override, wallet_name, account_name);
+        let public_key_hex =
+            wallet::resolve_account_public_key(storage, wallet_name, account_name)?;
+        return parse_account_identifier(&public_key_hex);
     }
-    parse_public_key_hex(input)
+    parse_account_identifier(input)
 }
 
-fn parse_public_key_hex(input: &str) -> Result<String> {
+fn parse_account_identifier(input: &str) -> Result<AccountIdentifier> {
     let bytes = hex::decode(input).context("invalid public key hex")?;
+    if bytes.len() == ACCOUNT_HASH_LEN {
+        let mut hash = [0u8; ACCOUNT_HASH_LEN];
+        hash.copy_from_slice(&bytes);
+        return Ok(AccountIdentifier::AccountHash(AccountHash::new(hash)));
+    }
     let public_key: PublicKey =
         deserialize_from_slice(&bytes).map_err(|_| anyhow::anyhow!("invalid public key bytes"))?;
-    Ok(public_key.to_hex_string())
+    Ok(AccountIdentifier::PublicKey(public_key))
 }
 
-fn format_cspr(motes: u64) -> String {
-    let whole = motes / MOTES_PER_CSPR;
-    let fractional = motes % MOTES_PER_CSPR;
+fn format_cspr(motes: &U512) -> String {
+    let divisor = U512::from(MOTES_PER_CSPR);
+    let whole = motes / divisor;
+    let fractional = motes % divisor;
+    let fractional: u64 = fractional.as_u64();
     format!("{whole}.{fractional:09}")
 }

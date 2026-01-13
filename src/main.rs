@@ -2,6 +2,7 @@ mod balance;
 mod config;
 mod network;
 mod secure_storage;
+pub mod storage;
 mod wallet;
 
 use anyhow::Result;
@@ -15,9 +16,6 @@ use clap::{Parser, Subcommand};
 )]
 /// Top-level CLI entry point.
 struct Cli {
-    /// Override the default storage location (file or directory).
-    #[arg(long)]
-    wallet_path: Option<std::path::PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -37,10 +35,11 @@ enum Command {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let storage = storage::StorageConfig::from_config()?;
     match cli.command {
-        Command::Wallet(command) => wallet::handle(&cli.wallet_path, command),
+        Command::Wallet(command) => wallet::handle(&storage, command),
         Command::Network(command) => network::handle(command),
         Command::Config(command) => config::handle(command),
-        Command::Balance(command) => balance::handle(&cli.wallet_path, command),
+        Command::Balance(command) => balance::handle(&storage, command),
     }
 }

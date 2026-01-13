@@ -32,11 +32,13 @@ pub struct NetworkUseArgs {
 }
 
 #[derive(Serialize, Deserialize)]
-struct NetworkConfig {
+struct AppConfig {
     #[serde(default)]
     active: Option<String>,
     #[serde(default)]
     networks: BTreeMap<String, NetworkEntry>,
+    #[serde(default)]
+    storage: Option<StorageSection>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -45,6 +47,13 @@ struct NetworkEntry {
     rest: String,
     sse: String,
     rpc: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum StorageSection {
+    File { root_path: String },
+    Keyring,
 }
 
 pub fn handle(args: NetworkArgs) -> Result<()> {
@@ -101,7 +110,7 @@ fn network_list() -> Result<()> {
     Ok(())
 }
 
-fn resolve_network_key(config: &NetworkConfig, name: &str) -> Result<String> {
+fn resolve_network_key(config: &AppConfig, name: &str) -> Result<String> {
     if config.networks.contains_key(name) {
         return Ok(name.to_string());
     }
@@ -130,15 +139,15 @@ fn resolve_network_key(config: &NetworkConfig, name: &str) -> Result<String> {
     Ok(key.clone())
 }
 
-fn load_or_init_config(path: &Path) -> Result<NetworkConfig> {
+fn load_or_init_config(path: &Path) -> Result<AppConfig> {
     if !path.exists() {
-        let config = default_config();
+        let config = default_config()?;
         save_config(path, &config)?;
         return Ok(config);
     }
     let data =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let mut config: NetworkConfig =
+    let mut config: AppConfig =
         toml::from_str(&data).with_context(|| format!("failed to parse {}", path.display()))?;
     if config.active.is_none() && config.networks.contains_key("devnet") {
         config.active = Some("devnet".to_string());
@@ -147,7 +156,7 @@ fn load_or_init_config(path: &Path) -> Result<NetworkConfig> {
     Ok(config)
 }
 
-fn save_config(path: &Path, config: &NetworkConfig) -> Result<()> {
+fn save_config(path: &Path, config: &AppConfig) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -192,7 +201,7 @@ fn config_dir() -> Result<PathBuf> {
         .join("casper-cli"))
 }
 
-fn default_config() -> NetworkConfig {
+fn default_config() -> Result<AppConfig> {
     let mut networks = BTreeMap::new();
     networks.insert(
         "devnet".to_string(),
@@ -204,8 +213,15 @@ fn default_config() -> NetworkConfig {
         },
     );
 
-    NetworkConfig {
+    Ok(AppConfig {
         active: Some("devnet".to_string()),
         networks,
-    }
+        storage: Some(StorageSection::File {
+            root_path: default_storage_root()?,
+        }),
+    })
+}
+
+fn default_storage_root() -> Result<String> {
+    Ok(config_dir()?.display().to_string())
 }
