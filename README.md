@@ -218,6 +218,16 @@ cargo run -- transaction call contract-... --from mywallet:account-0 \
   --arg recipient:Key=hash-... --arg note:String="hello"
 ```
 
+### transaction transfer
+
+Transfers CSPR from a wallet account to a target account. The recipient can be a wallet/account reference, public key bytes hex, or account hash bytes hex. You can set `--gas-price-tolerance` (default: 1).
+
+```bash
+cargo run -- tx transfer --from mywallet:account-0 --to mywallet:account-1 --amount 1.25
+cargo run -- tx transfer --from mywallet:account-0 --to <public-key-hex> --amount 10
+cargo run -- tx transfer --from mywallet:account-0 --to <account-hash-hex> --amount 0.5 --gas-price-tolerance 2
+```
+
 ### Argument format
 
 You can pass multiple `--arg` values. Each arg has one of two forms:
