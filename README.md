@@ -184,6 +184,17 @@ Opens `config.toml` in your `$EDITOR`:
 cargo run -- config edit
 ```
 
+## Transaction commands
+
+### transaction put
+
+Builds a session transaction from Wasm and submits it to the active network. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. You can also use `tx` as an alias.
+
+```bash
+cargo run -- transaction put path/to/contract.wasm --payment-amount 2.5 --from mywallet:account-0
+cargo run -- transaction put path/to/contract.wasm --from mywallet:account-0 --install-upgrade
+```
+
 ## Security notes
 
 Wallet secrets are encrypted at rest by default:

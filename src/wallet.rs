@@ -5,6 +5,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use bip32::{DerivationPath, Language, Mnemonic, XPrv};
 use blake2::Blake2bVar;
 use blake2::digest::{Update, VariableOutput};
+use casper_types::SecretKey;
 use clap::{Args, Subcommand};
 use comfy_table::{Cell, Table};
 use rand_core::OsRng;
@@ -185,6 +186,35 @@ pub fn resolve_account_public_key(
         account_name,
         wallet_name
     );
+}
+
+pub fn resolve_account_secret_key(
+    storage: &StorageConfig,
+    wallet_name: &str,
+    account_name: &str,
+) -> Result<SecretKey> {
+    let storage = wallet_storage(storage, wallet_name)?;
+    ensure_wallet_exists(&storage, wallet_name)?;
+    let metadata = load_metadata(&storage.metadata_path)?;
+    let account = metadata
+        .accounts
+        .iter()
+        .find(|account| account.name == account_name)
+        .ok_or_else(|| {
+            anyhow!(
+                "account '{}' not found in wallet '{}'",
+                account_name,
+                wallet_name
+            )
+        })?;
+    let root_secret = storage
+        .storage
+        .load(wallet_name)
+        .map_err(|err| anyhow!(err.to_string()))?;
+    let seed = root_seed(&root_secret)?;
+    let derivation_path = account.path.parse::<DerivationPath>()?;
+    let xprv = XPrv::derive_from_path(&seed, &derivation_path)?;
+    SecretKey::secp256k1_from_bytes(xprv.to_bytes()).map_err(|err| anyhow!(err.to_string()))
 }
 
 fn create_wallet(storage: &StorageConfig, args: CreateArgs) -> Result<()> {

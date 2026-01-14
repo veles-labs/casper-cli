@@ -3,6 +3,7 @@ mod config;
 mod network;
 mod secure_storage;
 pub mod storage;
+mod transaction;
 mod wallet;
 
 use anyhow::Result;
@@ -31,6 +32,9 @@ enum Command {
     Config(config::ConfigArgs),
     /// Fetch the balance for a wallet account or public key.
     Balance(balance::BalanceArgs),
+    /// Build and submit transactions.
+    #[command(name = "transaction", alias = "tx")]
+    Transaction(transaction::TxArgs),
 }
 
 fn main() -> Result<()> {
@@ -41,5 +45,6 @@ fn main() -> Result<()> {
         Command::Network(command) => network::handle(command),
         Command::Config(command) => config::handle(command),
         Command::Balance(command) => balance::handle(&storage, command),
+        Command::Transaction(command) => transaction::handle(&storage, command),
     }
 }

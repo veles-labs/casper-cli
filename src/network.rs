@@ -194,6 +194,23 @@ pub(crate) fn active_network_rpc() -> Result<(String, String)> {
     Ok((active, entry.rpc.clone()))
 }
 
+pub(crate) fn active_network_chain_name() -> Result<String> {
+    let config_path = config_path()?;
+    let config = load_or_init_config(&config_path)?;
+    let active = config
+        .active
+        .clone()
+        .ok_or_else(|| anyhow!("active network not set"))?;
+    let entry = config
+        .networks
+        .get(&active)
+        .ok_or_else(|| anyhow!("active network '{active}' not found"))?;
+    if entry.chain_name.trim().is_empty() {
+        bail!("active network '{active}' has no chain name configured");
+    }
+    Ok(entry.chain_name.clone())
+}
+
 fn config_dir() -> Result<PathBuf> {
     Ok(dirs::config_dir()
         .or_else(|| std::env::current_dir().ok())
