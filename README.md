@@ -203,7 +203,60 @@ Builds a session transaction from Wasm and submits it to the active network. The
 ```bash
 cargo run -- transaction put path/to/contract.wasm --payment-amount 2.5 --from mywallet:account-0
 cargo run -- transaction put path/to/contract.wasm --from mywallet:account-0 --install-upgrade
+cargo run -- transaction put path/to/contract.wasm --from mywallet:account-0 \
+  --arg flag:Bool=true --arg amount:U512=1000000000000
 ```
+
+### transaction call
+
+Calls a stored contract by hash (formatted `contract-`/`addressable-entity-` or raw hex) using the `call` entry point. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1.
+
+```bash
+cargo run -- transaction call contract-... --from mywallet:account-0
+cargo run -- tx call <contract-hash-hex> --payment-amount 3.0 --gas-price-tolerance 2 --from mywallet:account-0
+cargo run -- transaction call contract-... --from mywallet:account-0 \
+  --arg recipient:Key=hash-... --arg note:String="hello"
+```
+
+### Argument format
+
+You can pass multiple `--arg` values. Each arg has one of two forms:
+
+- `name:cltype=value` to parse the value using full CLType syntax (arbitrarily nested).
+- `name=value` to pass raw hex bytes with implicit `Any` type (optional `0x` prefix).
+
+If the arg name contains `:` or `=`, escape them with backslashes (e.g. `meta\\:x\\=y`).
+
+The `cltype` portion supports arbitrarily nested Rust-like syntax (e.g. `Result<Option<U64>, String>`).
+Aliases are also accepted: `account_hash`/`account-hash` => `ByteArray[32]`, `byte_array`/`byte-array`
+=> `ByteArray[...]`, `public_key`/`public-key` => `PublicKey`, `()` => `Unit`.
+
+For `Option<T>` where `T` is a basic type (Bool, numeric primitives, String, Key, URef, PublicKey, Unit),
+you can supply the human-readable value for `Some(T)` and the literal `None` for the none tag. To force
+hex bytes for `Option<T>`, prefix the value with `0x`.
+
+Examples:
+
+| --arg example | CLType | value bytes (hex) |
+| --- | --- | --- |
+| `--arg flag:Bool=true` | `CLType::Bool` | `01` |
+| `--arg opt:Option<Bool>=None` | `CLType::Option(CLType::Bool)` | `00` |
+| `--arg opt:Option<String>=hello` | `CLType::Option(CLType::String)` | `010500000068656c6c6f` |
+| `--arg opt:Option<Bool>=0x0101` | `CLType::Option(CLType::Bool)` | `0101` |
+| `--arg msg:String=abc` | `CLType::String` | `03000000616263` |
+| `--arg amount:U64=1234` | `CLType::U64` | `d204000000000000` |
+| `--arg bytes:List<U8>=0x03000000010203` | `CLType::List(CLType::U8)` | `03000000010203` |
+| `--arg res:Result<Option<U64>, U64>=0x01010700000000000000` | `CLType::Result { ok, err }` | `01010700000000000000` |
+| `--arg map:Map<String, U32>=0x0200000005000000616c70686101000000040000006265746102000000` | `CLType::Map { key, value }` | `0200000005000000616c70686101000000040000006265746102000000` |
+| `--arg pair:(Bool, U32)=0x0102000000` | `CLType::Tuple2([Bool, U32])` | `0102000000` |
+| `--arg data:ByteArray[4]=0x01020304` | `CLType::ByteArray(4)` | `01020304` |
+| `--arg acct:account_hash=0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20` | `CLType::ByteArray(32)` | `0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20` |
+| `--arg payload=0xdeadbeef` | `CLType::Any` | `deadbeef` |
+
+Arguments:
+
+- `--arg name:cltype=value` to pass a typed argument (CLType syntax supports nesting like `Option<Bool>` or `Result<U64, U64>`).
+- `--arg name=value` to pass raw bytes as hex with implicit `Any` type (optional `0x` prefix).
 
 ## Security notes
 

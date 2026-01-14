@@ -224,9 +224,9 @@ fn default_config() -> Result<AppConfig> {
         "devnet".to_string(),
         NetworkEntry {
             chain_name: "casper-dev".to_string(),
-            rest: "http://127.0.0.1:14102".to_string(),
-            sse: "http://127.0.0.1:18102/events".to_string(),
-            rpc: "http://127.0.0.1:11102/rpc".to_string(),
+            rest: "http://127.0.0.1:14101".to_string(),
+            sse: "http://127.0.0.1:18101/events".to_string(),
+            rpc: "http://127.0.0.1:11101/rpc".to_string(),
         },
     );
 

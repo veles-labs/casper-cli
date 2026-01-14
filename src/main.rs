@@ -1,3 +1,4 @@
+mod arguments;
 mod balance;
 mod config;
 mod network;

@@ -1,5 +1,10 @@
 use anyhow::{Context, Result, anyhow, bail};
-use casper_types::{PricingMode, Transaction, TransactionRuntimeParams, U512, bytesrepr::Bytes};
+use casper_types::contracts::ContractHash;
+use casper_types::{
+    AddressableEntityHash, DEFAULT_ENTRY_POINT_NAME, PricingMode, Transaction,
+    TransactionRuntimeParams, U512, bytesrepr::Bytes,
+};
+use casper_types::{RuntimeArgs, TransactionEntryPoint};
 use clap::{Args, Subcommand};
 use std::fs;
 use std::path::PathBuf;
@@ -7,6 +12,7 @@ use tokio::runtime::Runtime;
 use veles_casper_rust_sdk::TransactionV1Builder;
 use veles_casper_rust_sdk::jsonrpc::CasperClient;
 
+use crate::arguments::parse_argument;
 use crate::network;
 use crate::storage::StorageConfig;
 use crate::wallet;
@@ -23,6 +29,8 @@ pub struct TxArgs {
 pub enum TxCommand {
     /// Build a session transaction from Wasm.
     Put(PutArgs),
+    /// Call a stored contract by hash.
+    Call(CallArgs),
 }
 
 #[derive(Args)]
@@ -39,14 +47,39 @@ pub struct PutArgs {
     /// Wallet and account name in the form wallet:account.
     #[arg(long)]
     from: String,
+    /// Runtime argument in the form name:cltype=value or name=value (hex for Any).
+    #[arg(long = "arg", value_name = "NAME[:CLTYPE]=VALUE")]
+    args: Vec<String>,
     /// Mark the session as an install/upgrade transaction.
     #[arg(long)]
     install_upgrade: bool,
 }
 
+#[derive(Args)]
+/// Arguments for calling a stored contract.
+pub struct CallArgs {
+    /// Contract hash (contract-/addressable-entity- prefix or raw hex).
+    contract_hash: String,
+    /// Contract entry point name.
+    entry_point: String,
+    /// Payment amount in CSPR.
+    #[arg(long, default_value = "2.5")]
+    payment_amount: String,
+    /// Gas price tolerance (minimum 1).
+    #[arg(long, default_value_t = 1)]
+    gas_price_tolerance: u8,
+    /// Wallet and account name in the form wallet:account.
+    #[arg(long)]
+    from: String,
+    /// Runtime argument in the form name:cltype=value or name=value (hex for Any).
+    #[arg(long = "arg", value_name = "NAME[:CLTYPE]=VALUE")]
+    args: Vec<String>,
+}
+
 pub fn handle(storage: &StorageConfig, args: TxArgs) -> Result<()> {
     match args.command {
         TxCommand::Put(command) => put_session(storage, command),
+        TxCommand::Call(command) => call_contract(storage, command),
     }
 }
 
@@ -65,10 +98,12 @@ fn put_session(storage: &StorageConfig, args: PutArgs) -> Result<()> {
     let chain_name = network::active_network_chain_name()?;
     let (network_name, rpc_endpoint) = network::active_network_rpc()?;
 
+    let runtime_args = parse_runtime_args(&args.args)?;
     let builder =
         TransactionV1Builder::new_session(args.install_upgrade, Bytes::from(module_bytes), runtime)
             .with_pricing_mode(pricing_mode)
             .with_chain_name(chain_name)
+            .with_runtime_args(runtime_args)
             .with_secret_key(&secret_key);
 
     let tx = builder.build()?;
@@ -83,6 +118,44 @@ fn put_session(storage: &StorageConfig, args: PutArgs) -> Result<()> {
     Ok(())
 }
 
+fn call_contract(storage: &StorageConfig, args: CallArgs) -> Result<()> {
+    let contract_hash = parse_contract_hash(&args.contract_hash)?;
+    let runtime = TransactionRuntimeParams::VmCasperV1;
+    let payment_amount = u512_to_u64(parse_cspr_to_motes(&args.payment_amount)?)?;
+    let pricing_mode = PricingMode::PaymentLimited {
+        payment_amount,
+        gas_price_tolerance: args.gas_price_tolerance,
+        standard_payment: true,
+    };
+    let (wallet_name, account_name) = parse_wallet_account(&args.from)?;
+    let secret_key = wallet::resolve_account_secret_key(storage, &wallet_name, &account_name)?;
+    let chain_name = network::active_network_chain_name()?;
+    let (network_name, rpc_endpoint) = network::active_network_rpc()?;
+
+    let runtime_args = parse_runtime_args(&args.args)?;
+    let builder = TransactionV1Builder::new_targeting_invocable_entity(
+        contract_hash,
+        DEFAULT_ENTRY_POINT_NAME,
+        runtime,
+    )
+    .with_entry_point(TransactionEntryPoint::Custom(args.entry_point))
+    .with_pricing_mode(pricing_mode)
+    .with_chain_name(chain_name)
+    .with_runtime_args(runtime_args)
+    .with_secret_key(&secret_key);
+
+    let tx = builder.build()?;
+    let transaction = Transaction::V1(tx);
+    let runtime = Runtime::new().context("failed to start async runtime")?;
+    let tx_hash = runtime.block_on(async {
+        let client = CasperClient::new(rpc_endpoint);
+        client.put_transaction(transaction).await
+    })?;
+    let tx_hash_bytes = tx_hash.digest();
+    println!("Contract call submitted to {network_name}: {tx_hash_bytes:x}");
+    Ok(())
+}
+
 fn parse_wallet_account(value: &str) -> Result<(String, String)> {
     let (wallet_name, account_name) = value
         .split_once(':')
@@ -91,6 +164,40 @@ fn parse_wallet_account(value: &str) -> Result<(String, String)> {
         bail!("--from must be in the form wallet:account");
     }
     Ok((wallet_name.to_string(), account_name.to_string()))
+}
+
+fn parse_runtime_args(values: &[String]) -> Result<RuntimeArgs> {
+    let mut runtime_args = RuntimeArgs::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for value in values {
+        let (name, cl_value) = parse_argument(value).map_err(anyhow::Error::new)?;
+        if !seen.insert(name.clone()) {
+            bail!("duplicate argument name '{name}'");
+        }
+        runtime_args.insert_cl_value(name, cl_value);
+    }
+    Ok(runtime_args)
+}
+
+fn parse_contract_hash(value: &str) -> Result<AddressableEntityHash> {
+    const CONTRACT_HASH_LEN: usize = 32;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        bail!("contract hash cannot be empty");
+    }
+    if let Ok(hash) = AddressableEntityHash::from_formatted_str(trimmed) {
+        return Ok(hash);
+    }
+    if let Ok(hash) = ContractHash::from_formatted_str(trimmed) {
+        return Ok(AddressableEntityHash::from(hash));
+    }
+    let bytes = hex::decode(trimmed).context("invalid contract hash hex")?;
+    if bytes.len() != CONTRACT_HASH_LEN {
+        bail!("contract hash must be 32 bytes");
+    }
+    let mut hash = [0u8; CONTRACT_HASH_LEN];
+    hash.copy_from_slice(&bytes);
+    Ok(AddressableEntityHash::new(hash))
 }
 
 fn parse_cspr_to_motes(value: &str) -> Result<U512> {
@@ -139,8 +246,9 @@ fn u512_to_u64(value: U512) -> Result<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_cspr_to_motes, u512_to_u64};
-    use casper_types::U512;
+    use super::{parse_contract_hash, parse_cspr_to_motes, u512_to_u64};
+    use casper_types::contracts::ContractHash;
+    use casper_types::{AddressableEntityHash, U512};
 
     #[test]
     fn parses_whole_cspr() {
@@ -221,5 +329,29 @@ mod tests {
             motes,
             U512::from_dec_str("1000000000000000000000000000000000000").expect("u512")
         );
+    }
+
+    #[test]
+    fn parses_contract_hash_formatted() {
+        let contract_hash = ContractHash::new([1u8; 32]);
+        let formatted = contract_hash.to_formatted_string();
+        let parsed = parse_contract_hash(&formatted).expect("hash");
+        assert_eq!(parsed, AddressableEntityHash::from(contract_hash));
+    }
+
+    #[test]
+    fn parses_addressable_entity_hash_formatted() {
+        let entity_hash = AddressableEntityHash::new([2u8; 32]);
+        let formatted = entity_hash.to_formatted_string();
+        let parsed = parse_contract_hash(&formatted).expect("hash");
+        assert_eq!(parsed, entity_hash);
+    }
+
+    #[test]
+    fn parses_raw_contract_hash_hex() {
+        let bytes = [3u8; 32];
+        let hex = hex::encode(bytes);
+        let parsed = parse_contract_hash(&hex).expect("hash");
+        assert_eq!(parsed, AddressableEntityHash::new(bytes));
     }
 }
