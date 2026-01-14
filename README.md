@@ -174,6 +174,16 @@ cargo run -- balance 0202c1...deadbeef
 cargo run -- balance <account-hash-hex>
 ```
 
+## View account command
+
+Fetches account details from the active network and prints named keys.
+
+```bash
+cargo run -- view-account mywallet:account-0
+cargo run -- view-account <public-key-hex>
+cargo run -- view-account <account-hash-hex>
+```
+
 ## Config commands
 
 ### config edit

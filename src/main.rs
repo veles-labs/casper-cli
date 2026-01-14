@@ -4,6 +4,7 @@ mod network;
 mod secure_storage;
 pub mod storage;
 mod transaction;
+mod view_account;
 mod wallet;
 
 use anyhow::Result;
@@ -35,6 +36,9 @@ enum Command {
     /// Build and submit transactions.
     #[command(name = "transaction", alias = "tx")]
     Transaction(transaction::TxArgs),
+    /// View account details from the network.
+    #[command(name = "view-account")]
+    ViewAccount(view_account::ViewAccountArgs),
 }
 
 fn main() -> Result<()> {
@@ -46,5 +50,6 @@ fn main() -> Result<()> {
         Command::Config(command) => config::handle(command),
         Command::Balance(command) => balance::handle(&storage, command),
         Command::Transaction(command) => transaction::handle(&storage, command),
+        Command::ViewAccount(command) => view_account::handle(&storage, command),
     }
 }
