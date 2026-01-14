@@ -2,6 +2,7 @@ use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use anstyle::{AnsiColor, Style};
 use serde::Deserialize;
 
 use super::secret_file::{
@@ -106,8 +107,8 @@ impl FileSecureStorage {
                     }
                 }
                 if password.is_empty() {
-                    eprintln!("\x1b[1;31mWARNING: EMPTY MASTER PASSWORD\x1b[0m");
-                    eprintln!("\x1b[1;33mSecrets will be stored with no protection.\x1b[0m");
+                    Self::print_warning("WARNING: EMPTY MASTER PASSWORD");
+                    Self::print_warning_detail("Secrets will be stored with no protection.");
                 } else if password.len() < 12 {
                     eprintln!("WARNING: master password is short; consider using 12+ characters.");
                 }
@@ -119,8 +120,18 @@ impl FileSecureStorage {
     }
 
     fn warn_unencrypted_wallet() {
-        eprintln!("\x1b[1;31mWARNING: UNENCRYPTED WALLET\x1b[0m");
-        eprintln!("\x1b[1;33mSecrets will be stored in plaintext.\x1b[0m");
+        Self::print_warning("WARNING: UNENCRYPTED WALLET");
+        Self::print_warning_detail("Secrets will be stored in plaintext.");
+    }
+
+    fn print_warning(message: &str) {
+        let style = Style::new().bold().fg_color(Some(AnsiColor::Red.into()));
+        eprintln!("{}{}{}", style.render(), message, style.render_reset());
+    }
+
+    fn print_warning_detail(message: &str) {
+        let style = Style::new().fg_color(Some(AnsiColor::Yellow.into()));
+        eprintln!("{}{}{}", style.render(), message, style.render_reset());
     }
 }
 

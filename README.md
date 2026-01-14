@@ -76,7 +76,7 @@ cargo run -- wallet info mywallet
 
 ### wallet derive
 
-Derives accounts from the wallet root and stores them in metadata.
+Derives accounts from the wallet root and stores them in metadata. The command fails if the requested range overlaps existing accounts.
 
 ```bash
 cargo run -- wallet derive mywallet --start 0 --count 3

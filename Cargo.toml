@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1"
+anstyle = "1"
 argon2 = "0.5"
 bip32 = "0.5"
 blake2 = "0.10"
