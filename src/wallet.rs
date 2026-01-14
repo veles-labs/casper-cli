@@ -380,6 +380,14 @@ fn wallet_derive(storage: &StorageConfig, args: DeriveArgs) -> Result<()> {
 
     let mut updated = false;
     let end = args.start.saturating_add(args.count);
+    if args.count > 0
+        && metadata
+            .accounts
+            .iter()
+            .any(|account| account.index >= args.start && account.index < end)
+    {
+        bail!("requested derivation range overlaps existing accounts");
+    }
     let mut table = Table::new();
     table.set_header(vec!["Name", "Path", "Public Key"]);
     for index in args.start..end {
