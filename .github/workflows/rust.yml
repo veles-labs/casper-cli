@@ -11,6 +11,7 @@ env:
 
 jobs:
   build:
+
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -18,9 +19,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Install system deps (Ubuntu)
-      if: matrix.os == 'ubuntu-latest'
-      run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
     - name: Build
       run: cargo build --workspace --verbose
     - name: Run tests
