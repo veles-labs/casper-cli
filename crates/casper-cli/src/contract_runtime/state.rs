@@ -106,7 +106,7 @@ where
     }
 
     fn maybe_report_progress(&self) {
-        if self.visited_count == 1 || self.visited_count % PROGRESS_INTERVAL == 0 {
+        if self.visited_count == 1 || self.visited_count.is_multiple_of(PROGRESS_INTERVAL) {
             let (cached, downloaded) = self.store.cache_stats();
             eprintln!(
                 "trie progress: visited={}, cached={}, downloaded={}, remaining≈{}",

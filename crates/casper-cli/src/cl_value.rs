@@ -350,7 +350,7 @@ fn parse_hex_input(input: &str) -> Result<Vec<u8>> {
     if normalized.is_empty() {
         return Ok(Vec::new());
     }
-    if normalized.len() % 2 != 0 {
+    if !normalized.len().is_multiple_of(2) {
         return Err(CLValueError::OddHexLength);
     }
     hex::decode(&normalized).map_err(|err| CLValueError::InvalidHex {
