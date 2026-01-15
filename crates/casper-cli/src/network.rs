@@ -49,8 +49,7 @@ struct NetworkEntry {
     rest: String,
     sse: String,
     rpc: String,
-    #[serde(default, alias = "binary")]
-    binary_port: Option<String>,
+    binary_port: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -114,9 +113,7 @@ fn network_use(context: &ConfigContext, args: NetworkUseArgs) -> Result<()> {
     println!("REST: {}", entry.rest);
     println!("SSE: {}", entry.sse);
     println!("RPC: {}", entry.rpc);
-    if let Some(binary_port) = entry.binary_port.as_deref() {
-        println!("Binary port: {}", binary_port);
-    }
+    println!("Binary port: {}", entry.binary_port);
     Ok(())
 }
 
@@ -149,7 +146,7 @@ fn network_list(context: &ConfigContext) -> Result<()> {
             Cell::new(&entry.rest),
             Cell::new(&entry.sse),
             Cell::new(&entry.rpc),
-            Cell::new(entry.binary_port.as_deref().unwrap_or_default()),
+            Cell::new(&entry.binary_port),
         ]);
     }
 
@@ -275,7 +272,7 @@ pub(crate) fn active_network_binary_port(context: &ConfigContext) -> Result<(Str
         .networks
         .get(&active)
         .ok_or_else(|| anyhow!("active network '{active}' not found"))?;
-    let binary_port = entry.binary_port.as_deref().unwrap_or_default().trim();
+    let binary_port = entry.binary_port.trim();
     if binary_port.is_empty() {
         bail!("active network '{active}' has no binary port configured");
     }
@@ -338,7 +335,7 @@ fn config_with_storage(storage: StorageSection) -> AppConfig {
             rest: "http://127.0.0.1:14101".to_string(),
             sse: "http://127.0.0.1:18101/events".to_string(),
             rpc: "http://127.0.0.1:11101/rpc".to_string(),
-            binary_port: Some("127.0.0.1:11102".to_string()),
+            binary_port: "127.0.0.1:28101".to_string(),
         },
     );
 

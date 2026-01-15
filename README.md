@@ -2,6 +2,8 @@
 
 This CLI provides wallet management for Casper: create/recover wallets, derive accounts, and manage account names.
 
+![Casper CLI demo](casper-cli.gif)
+
 ## Install
 
 - `cargo install casper-cli`
@@ -160,7 +162,7 @@ chain_name = "casper-dev"
 rest = "http://127.0.0.1:14102"
 sse = "http://127.0.0.1:18102/events"
 rpc = "http://127.0.0.1:11102/rpc"
-binary = "127.0.0.1:11102"
+binary_port = "127.0.0.1:28101"
 ```
 
 ### network use

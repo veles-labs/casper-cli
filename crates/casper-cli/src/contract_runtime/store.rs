@@ -127,7 +127,6 @@ impl SledStore {
             return Ok(Some(cached));
         }
         self.record_cache_miss();
-
         let response = self
             .send_request(Command::Get(GetRequest::Trie {
                 trie_key: Digest::from_raw(state_root_hash),
