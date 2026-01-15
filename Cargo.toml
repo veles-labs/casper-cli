@@ -25,6 +25,11 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 zeroize = "1"
 veles-casper-rust-sdk = "0.3.0"
 casper-types = "6.1.0"
+casper-execution-engine = { version = "8.1.1" }
+casper-storage = { version = "2.1.1" }
+sled = "0.34.7"
+casper-binary-port = "1.1.1"
+veles-casper-contract-api = { version = "0.1.0", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tempfile = "3"

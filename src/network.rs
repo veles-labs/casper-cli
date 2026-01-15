@@ -47,6 +47,8 @@ struct NetworkEntry {
     rest: String,
     sse: String,
     rpc: String,
+    #[serde(default, alias = "binary")]
+    binary_port: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -79,6 +81,9 @@ fn network_use(args: NetworkUseArgs) -> Result<()> {
     println!("REST: {}", entry.rest);
     println!("SSE: {}", entry.sse);
     println!("RPC: {}", entry.rpc);
+    if let Some(binary_port) = entry.binary_port.as_deref() {
+        println!("Binary port: {}", binary_port);
+    }
     Ok(())
 }
 
@@ -93,7 +98,15 @@ fn network_list() -> Result<()> {
 
     let active = config.active.as_deref();
     let mut table = Table::new();
-    table.set_header(vec!["Name", "Chain", "Active", "REST", "SSE", "RPC"]);
+    table.set_header(vec![
+        "Name",
+        "Chain",
+        "Active",
+        "REST",
+        "SSE",
+        "RPC",
+        "Binary port",
+    ]);
     for (name, entry) in config.networks {
         let is_active = active == Some(name.as_str());
         table.add_row(vec![
@@ -103,6 +116,7 @@ fn network_list() -> Result<()> {
             Cell::new(&entry.rest),
             Cell::new(&entry.sse),
             Cell::new(&entry.rpc),
+            Cell::new(entry.binary_port.as_deref().unwrap_or_default()),
         ]);
     }
 
@@ -194,6 +208,24 @@ pub(crate) fn active_network_rpc() -> Result<(String, String)> {
     Ok((active, entry.rpc.clone()))
 }
 
+pub(crate) fn active_network_binary_port() -> Result<(String, String)> {
+    let config_path = config_path()?;
+    let config = load_or_init_config(&config_path)?;
+    let active = config
+        .active
+        .clone()
+        .ok_or_else(|| anyhow!("active network not set"))?;
+    let entry = config
+        .networks
+        .get(&active)
+        .ok_or_else(|| anyhow!("active network '{active}' not found"))?;
+    let binary_port = entry.binary_port.as_deref().unwrap_or_default().trim();
+    if binary_port.is_empty() {
+        bail!("active network '{active}' has no binary port configured");
+    }
+    Ok((active, binary_port.to_string()))
+}
+
 pub(crate) fn active_network_chain_name() -> Result<String> {
     let config_path = config_path()?;
     let config = load_or_init_config(&config_path)?;
@@ -227,6 +259,7 @@ fn default_config() -> Result<AppConfig> {
             rest: "http://127.0.0.1:14101".to_string(),
             sse: "http://127.0.0.1:18101/events".to_string(),
             rpc: "http://127.0.0.1:11101/rpc".to_string(),
+            binary_port: Some("127.0.0.1:11102".to_string()),
         },
     );
 

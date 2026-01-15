@@ -145,6 +145,7 @@ chain_name = "casper-dev"
 rest = "http://127.0.0.1:14102"
 sse = "http://127.0.0.1:18102/events"
 rpc = "http://127.0.0.1:11102/rpc"
+binary = "127.0.0.1:11102"
 ```
 
 ### network use
@@ -196,36 +197,72 @@ cargo run -- config edit
 
 ## Transaction commands
 
+Simulation uses the network binary port; set `binary` (ip:port) in `config.toml` before using `--simulate`.
+The simulator runs a local execution engine and will download trie objects from the node via the
+binary port as needed. Unlike speculative execution, it can report return values, which can be
+useful for calls like `balance_of` on a CEP-18 token without reconstructing dictionary item keys
+from base64.
+Return values are rendered on a best-effort basis into a human-readable CLValue representation,
+even for nested/complex types. If formatting fails, the raw `0x` bytes are shown instead.
+
+Examples (from unit tests):
+
+| CLType | Return bytes (hex) | Rendered output |
+| --- | --- | --- |
+| `Option<Bool>` | `0x0101` | `Some(true)` |
+| `(Bool, U32, String)` | `0x0107000000020000006869` | `(true, 7, hi)` |
+| `Map<String, U32>` | `0x0200000005000000616c70686101000000040000006265746102000000` | `{alpha: 1, beta: 2}` |
+
+```bash
+cargo run -- transaction  call --simulate --from devnet:user-1 $CONTRACT_HASH hello
+```
+
+Example output:
+
+```
+Simulation result on devnet at block height 10964:
+Gas used: 0.013064020
+Execution succeeded.
+Return String: "Hello, world!"
+New tries downloaded: 1
+Cache hits during execution: 25
+Cleaning up unreferenced tries...
+Cleaned up 2 unreferenced tries
+```
+
 ### transaction put
 
-Builds a session transaction from Wasm and submits it to the active network. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. You can also use `tx` as an alias.
+Builds a session transaction from Wasm and submits it to the active network. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. Use `--simulate` to run a local execution engine via the binary port without submitting the transaction. You can also use `tx` as an alias.
 
 ```bash
 cargo run -- transaction put path/to/contract.wasm --payment-amount 2.5 --from mywallet:account-0
 cargo run -- transaction put path/to/contract.wasm --from mywallet:account-0 --install-upgrade
 cargo run -- transaction put path/to/contract.wasm --from mywallet:account-0 \
   --arg flag:Bool=true --arg amount:U512=1000000000000
+cargo run -- transaction put path/to/contract.wasm --from mywallet:account-0 --simulate
 ```
 
 ### transaction call
 
-Calls a stored contract by hash (formatted `contract-`/`addressable-entity-` or raw hex) using the `call` entry point. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1.
+Calls a stored contract by hash (formatted `contract-`/`addressable-entity-` or raw hex) using the `call` entry point. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. Use `--simulate` to run a local execution engine via the binary port without submitting the transaction.
 
 ```bash
 cargo run -- transaction call contract-... --from mywallet:account-0
 cargo run -- tx call <contract-hash-hex> --payment-amount 3.0 --gas-price-tolerance 2 --from mywallet:account-0
 cargo run -- transaction call contract-... --from mywallet:account-0 \
   --arg recipient:Key=hash-... --arg note:String="hello"
+cargo run -- tx call <contract-hash-hex> --from mywallet:account-0 --simulate
 ```
 
 ### transaction transfer
 
-Transfers CSPR from a wallet account to a target account. The recipient can be a wallet/account reference, public key bytes hex, or account hash bytes hex. You can set `--gas-price-tolerance` (default: 1).
+Transfers CSPR from a wallet account to a target account. The recipient can be a wallet/account reference, public key bytes hex, or account hash bytes hex. You can set `--gas-price-tolerance` (default: 1). Use `--simulate` to run a local execution engine via the binary port without submitting the transaction.
 
 ```bash
 cargo run -- tx transfer --from mywallet:account-0 --to mywallet:account-1 --amount 1.25
 cargo run -- tx transfer --from mywallet:account-0 --to <public-key-hex> --amount 10
 cargo run -- tx transfer --from mywallet:account-0 --to <account-hash-hex> --amount 0.5 --gas-price-tolerance 2
+cargo run -- tx transfer --from mywallet:account-0 --to mywallet:account-1 --amount 1.25 --simulate
 ```
 
 ### Argument format

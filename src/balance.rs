@@ -2,14 +2,13 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use tokio::runtime::Runtime;
 
-use casper_types::{PublicKey, U512, account::AccountHash, bytesrepr::deserialize_from_slice};
+use casper_types::{PublicKey, account::AccountHash, bytesrepr::deserialize_from_slice};
 use veles_casper_rust_sdk::jsonrpc::{AccountIdentifier, CasperClient};
 
 use crate::network;
 use crate::storage::StorageConfig;
 use crate::wallet;
 
-const MOTES_PER_CSPR: u64 = 1_000_000_000;
 const ACCOUNT_HASH_LEN: usize = 32;
 
 #[derive(Args)]
@@ -33,7 +32,7 @@ pub fn handle(storage: &StorageConfig, args: BalanceArgs) -> Result<()> {
 
     match result {
         Some(motes) => {
-            let cspr = format_cspr(&motes);
+            let cspr = crate::utils::format_cspr(&motes);
             println!("Balance of {name} on {network_name}: {cspr} CSPR");
         }
         None => {
@@ -66,12 +65,4 @@ fn parse_account_identifier(input: &str) -> Result<AccountIdentifier> {
     let public_key: PublicKey =
         deserialize_from_slice(&bytes).map_err(|_| anyhow::anyhow!("invalid public key bytes"))?;
     Ok(AccountIdentifier::PublicKey(public_key))
-}
-
-fn format_cspr(motes: &U512) -> String {
-    let divisor = U512::from(MOTES_PER_CSPR);
-    let whole = motes / divisor;
-    let fractional = motes % divisor;
-    let fractional: u64 = fractional.as_u64();
-    format!("{whole}.{fractional:09}")
 }

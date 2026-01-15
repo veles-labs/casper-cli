@@ -1,22 +1,27 @@
 use anyhow::{Context, Result, anyhow, bail};
+use casper_execution_engine::engine_state::{EngineConfig, ExecutionEngineV1};
 use casper_types::account::AccountHash;
 use casper_types::bytesrepr::{Bytes, deserialize_from_slice};
 use casper_types::contracts::ContractHash;
 use casper_types::{
-    AddressableEntityHash, DEFAULT_ENTRY_POINT_NAME, PricingMode, PublicKey, RuntimeArgs,
-    Transaction, TransactionEntryPoint, TransactionRuntimeParams, TransferTarget, U512, URef,
+    AddressableEntityHash, CLType, DEFAULT_ENTRY_POINT_NAME, PricingMode, PublicKey, RuntimeArgs,
+    Transaction, TransactionEntryPoint, TransactionRuntimeParams, TransferTarget, URef,
 };
 use clap::{Args, Subcommand};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::runtime::Runtime;
 use veles_casper_rust_sdk::TransactionV1Builder;
 use veles_casper_rust_sdk::jsonrpc::CasperClient;
 
 use crate::arguments::parse_argument;
-use crate::network;
+use crate::contract_runtime::ContractRuntime;
+use crate::contract_runtime::store::SledStore;
 use crate::storage::StorageConfig;
 use crate::wallet;
+use crate::{cl_type, cl_value};
+use crate::{network, utils};
 
 const DEFAULT_GAS_PRICE_TOLERANCE: u8 = 1;
 
@@ -58,6 +63,9 @@ pub struct PutArgs {
     /// Mark the session as an install/upgrade transaction.
     #[arg(long)]
     install_upgrade: bool,
+    /// Simulate execution using the network binary port.
+    #[arg(long)]
+    simulate: bool,
 }
 
 #[derive(Args)]
@@ -79,6 +87,9 @@ pub struct CallArgs {
     /// Runtime argument in the form name:cltype=value or name=value (hex for Any).
     #[arg(long = "arg", value_name = "NAME[:CLTYPE]=VALUE")]
     args: Vec<String>,
+    /// Simulate execution using the network binary port.
+    #[arg(long)]
+    simulate: bool,
 }
 
 #[derive(Args)]
@@ -96,6 +107,9 @@ pub struct TransferArgs {
     /// Gas price tolerance (minimum 1).
     #[arg(long, default_value_t = DEFAULT_GAS_PRICE_TOLERANCE)]
     gas_price_tolerance: u8,
+    /// Simulate execution using the network binary port.
+    #[arg(long)]
+    simulate: bool,
 }
 
 pub fn handle(storage: &StorageConfig, args: TxArgs) -> Result<()> {
@@ -110,7 +124,10 @@ fn put_session(storage: &StorageConfig, args: PutArgs) -> Result<()> {
     let module_bytes =
         fs::read(&args.wasm).with_context(|| format!("failed to read {}", args.wasm.display()))?;
     let runtime = TransactionRuntimeParams::VmCasperV1;
-    let payment_amount = u512_to_u64(parse_cspr_to_motes("payment amount", &args.payment_amount)?)?;
+    let payment_amount = utils::u512_to_u64(utils::parse_cspr_to_motes(
+        "payment amount",
+        &args.payment_amount,
+    )?)?;
     let pricing_mode = PricingMode::PaymentLimited {
         payment_amount,
         gas_price_tolerance: args.gas_price_tolerance,
@@ -131,6 +148,9 @@ fn put_session(storage: &StorageConfig, args: PutArgs) -> Result<()> {
 
     let tx = builder.build()?;
     let transaction = Transaction::V1(tx);
+    if args.simulate {
+        return simulate_transaction(storage, transaction);
+    }
     let runtime = Runtime::new().context("failed to start async runtime")?;
     let tx_hash = runtime.block_on(async {
         let client = CasperClient::new(rpc_endpoint);
@@ -144,7 +164,10 @@ fn put_session(storage: &StorageConfig, args: PutArgs) -> Result<()> {
 fn call_contract(storage: &StorageConfig, args: CallArgs) -> Result<()> {
     let contract_hash = parse_contract_hash(&args.contract_hash)?;
     let runtime = TransactionRuntimeParams::VmCasperV1;
-    let payment_amount = u512_to_u64(parse_cspr_to_motes("payment amount", &args.payment_amount)?)?;
+    let payment_amount = utils::u512_to_u64(utils::parse_cspr_to_motes(
+        "payment amount",
+        &args.payment_amount,
+    )?)?;
     let pricing_mode = PricingMode::PaymentLimited {
         payment_amount,
         gas_price_tolerance: args.gas_price_tolerance,
@@ -169,6 +192,9 @@ fn call_contract(storage: &StorageConfig, args: CallArgs) -> Result<()> {
 
     let tx = builder.build()?;
     let transaction = Transaction::V1(tx);
+    if args.simulate {
+        return simulate_transaction(storage, transaction);
+    }
     let runtime = Runtime::new().context("failed to start async runtime")?;
     let tx_hash = runtime.block_on(async {
         let client = CasperClient::new(rpc_endpoint);
@@ -180,7 +206,7 @@ fn call_contract(storage: &StorageConfig, args: CallArgs) -> Result<()> {
 }
 
 fn transfer(storage: &StorageConfig, args: TransferArgs) -> Result<()> {
-    let amount = parse_cspr_to_motes("transfer amount", &args.amount)?;
+    let amount = utils::parse_cspr_to_motes("transfer amount", &args.amount)?;
     let target = resolve_transfer_target(storage, &args.to)?;
     let (wallet_name, account_name) = parse_wallet_account(&args.from)?;
     let secret_key = wallet::resolve_account_secret_key(storage, &wallet_name, &account_name)?;
@@ -200,6 +226,9 @@ fn transfer(storage: &StorageConfig, args: TransferArgs) -> Result<()> {
 
     let tx = builder.build()?;
     let transaction = Transaction::V1(tx);
+    if args.simulate {
+        return simulate_transaction(storage, transaction);
+    }
     let runtime = Runtime::new().context("failed to start async runtime")?;
     let tx_hash = runtime.block_on(async {
         let client = CasperClient::new(rpc_endpoint);
@@ -231,6 +260,95 @@ fn parse_runtime_args(values: &[String]) -> Result<RuntimeArgs> {
         runtime_args.insert_cl_value(name, cl_value);
     }
     Ok(runtime_args)
+}
+
+fn simulate_transaction(storage: &StorageConfig, transaction: Transaction) -> Result<()> {
+    let (network_name, binary_port) = network::active_network_binary_port()?;
+    let (_network_name, rpc) = network::active_network_rpc()?;
+
+    let base_dir = storage.base_dir()?;
+    let runtime_dir = base_dir.join("global-state-cache").join(&network_name);
+    fs::create_dir_all(&runtime_dir)
+        .with_context(|| format!("failed to create {}", runtime_dir.display()))?;
+    let db = sled::open(&runtime_dir)
+        .with_context(|| format!("failed to open {}", runtime_dir.display()))?;
+    let store = SledStore::new(
+        binary_port.clone(),
+        Arc::new(db),
+        &format!("trie-cache-{network_name}"),
+    );
+    let engine = ExecutionEngineV1::new(EngineConfig::default());
+    let contract_runtime = ContractRuntime::new(store.clone(), engine);
+    let runtime = Runtime::new().context("failed to start async runtime")?;
+
+    let client = CasperClient::new(rpc);
+    let block = runtime
+        .block_on(async { client.get_block(None).await })?
+        .block_with_signatures
+        .ok_or(anyhow!("Nope"))?
+        .block;
+    let block_header = block.clone_header();
+    let state_root_hash = *block.state_root_hash();
+    let block_info = casper_execution_engine::engine_state::BlockInfo::new(
+        state_root_hash,
+        block.timestamp().into(),
+        *block_header.parent_hash(),
+        block_header.height(),
+        block_header.protocol_version(),
+    );
+    let Transaction::V1(txn) = transaction else {
+        return Err(anyhow!("Only Transaction V1 is supported for simulation"));
+    };
+
+    let (hits_before, misses_before) = store.cache_stats();
+
+    let result = contract_runtime
+        .execute(block_info, txn)
+        .context("execution")?;
+
+    println!(
+        "Simulation result on {network_name} at block height {}:",
+        block_header.height()
+    );
+    println!(
+        "Gas used: {}",
+        utils::format_cspr(&result.consumed().value())
+    );
+    match result.error() {
+        Some(exec_error) => {
+            eprintln!("Execution failed: {}", exec_error);
+            bail!("simulation failed");
+        }
+        None => {
+            println!("Execution succeeded.");
+        }
+    }
+
+    if let Some(bytes) = result.ret()
+        && bytes.cl_type() != &CLType::Unit
+    {
+        let value = match cl_value::cl_value_to_string(bytes) {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("Warning: failed to format return value: {error}");
+                format!("0x{}", hex::encode(bytes.inner_bytes()))
+            }
+        };
+        println!(
+            "Return {}: {value}",
+            cl_type::cl_type_to_string(bytes.cl_type())
+        );
+    } else {
+        println!("Return: <empty>");
+    }
+
+    let (hits_after, misses_after) = store.cache_stats();
+    println!("New tries downloaded: {}", misses_after - misses_before);
+    println!("Cache hits during execution: {}", hits_after - hits_before);
+    println!("Cleaning up unreferenced tries...");
+    let cleaned_up = store.gc_unreferenced(&[state_root_hash.value()])?;
+    println!("Cleaned up {} unreferenced tries", cleaned_up);
+    Ok(())
 }
 
 fn resolve_transfer_target(storage: &StorageConfig, value: &str) -> Result<TransferTarget> {
@@ -289,140 +407,15 @@ fn parse_contract_hash(value: &str) -> Result<AddressableEntityHash> {
     Ok(AddressableEntityHash::new(hash))
 }
 
-fn parse_cspr_to_motes(label: &str, value: &str) -> Result<U512> {
-    const MOTES_PER_CSPR: u64 = 1_000_000_000;
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        bail!("{label} cannot be empty");
-    }
-    let normalized = trimmed.replace('_', "");
-    let (whole, frac) = match normalized.split_once('.') {
-        Some((whole, frac)) => (whole, frac),
-        None => (normalized.as_str(), ""),
-    };
-    if whole.is_empty() && frac.is_empty() {
-        bail!("{label} is invalid");
-    }
-    let whole_motes = if whole.is_empty() {
-        U512::zero()
-    } else {
-        U512::from_dec_str(whole)
-            .map_err(|_| anyhow!("{label} has invalid digits"))?
-            .checked_mul(U512::from(MOTES_PER_CSPR))
-            .ok_or_else(|| anyhow!("{label} is too large"))?
-    };
-    if frac.len() > 9 {
-        bail!("{label} supports up to 9 decimal places");
-    }
-    let mut frac_digits = frac.to_string();
-    while frac_digits.len() < 9 {
-        frac_digits.push('0');
-    }
-    let frac_motes = if frac_digits.is_empty() {
-        U512::zero()
-    } else {
-        U512::from_dec_str(&frac_digits).map_err(|_| anyhow!("{label} has invalid digits"))?
-    };
-    whole_motes
-        .checked_add(frac_motes)
-        .ok_or_else(|| anyhow!("{label} is too large"))
-}
-
-fn u512_to_u64(value: U512) -> Result<u64> {
-    u64::try_from(value).map_err(|_| anyhow!("payment amount exceeds u64 range"))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{parse_contract_hash, parse_cspr_to_motes, parse_transfer_target, u512_to_u64};
+    use super::{parse_contract_hash, parse_transfer_target};
     use casper_types::bytesrepr::ToBytes;
     use casper_types::contracts::ContractHash;
     use casper_types::crypto::AsymmetricType;
     use casper_types::{
-        AccessRights, AddressableEntityHash, PublicKey, TransferTarget, U512, URef,
-        account::AccountHash,
+        AccessRights, AddressableEntityHash, PublicKey, TransferTarget, URef, account::AccountHash,
     };
-
-    #[test]
-    fn parses_whole_cspr() {
-        assert_eq!(
-            parse_cspr_to_motes("amount", "5").expect("motes"),
-            U512::from(5_000_000_000u64)
-        );
-    }
-
-    #[test]
-    fn parses_fractional_cspr() {
-        assert_eq!(
-            parse_cspr_to_motes("amount", "2.5").expect("motes"),
-            U512::from(2_500_000_000u64)
-        );
-        assert_eq!(
-            parse_cspr_to_motes("amount", ".5").expect("motes"),
-            U512::from(500_000_000u64)
-        );
-        assert_eq!(
-            parse_cspr_to_motes("amount", "0.000000001").expect("motes"),
-            U512::from(1u64)
-        );
-    }
-
-    #[test]
-    fn parses_with_underscores() {
-        assert_eq!(
-            parse_cspr_to_motes("amount", "1_000.000_000_001").expect("motes"),
-            U512::from(1_000_000_000_001u64)
-        );
-    }
-
-    #[test]
-    fn rejects_too_many_decimals() {
-        let result = parse_cspr_to_motes("amount", "1.0000000001");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn rejects_invalid_digits() {
-        let result = parse_cspr_to_motes("amount", "nope");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn max_u64_motes_is_ok() {
-        let max_cspr = "18446744073.709551615";
-        assert_eq!(
-            parse_cspr_to_motes("amount", max_cspr).expect("motes"),
-            U512::from(u64::MAX)
-        );
-    }
-
-    #[test]
-    fn rejects_overflowing_values() {
-        let over_decimal = "18446744073.709551616";
-        let over_whole = "18446744074";
-        let over_decimal = parse_cspr_to_motes("amount", over_decimal).expect("motes");
-        let over_whole = parse_cspr_to_motes("amount", over_whole).expect("motes");
-        assert_eq!(
-            over_decimal,
-            U512::from_dec_str("18446744073709551616").expect("u512"),
-        );
-        assert_eq!(
-            over_whole,
-            U512::from_dec_str("18446744074000000000").expect("u512"),
-        );
-        assert!(u512_to_u64(over_decimal).is_err());
-        assert!(u512_to_u64(over_whole).is_err());
-    }
-
-    #[test]
-    fn large_nctl_initial_values() {
-        let cspr = "1000000000000000000000000000";
-        let motes = parse_cspr_to_motes("amount", cspr).expect("motes");
-        assert_eq!(
-            motes,
-            U512::from_dec_str("1000000000000000000000000000000000000").expect("u512")
-        );
-    }
 
     #[test]
     fn parses_contract_hash_formatted() {
