@@ -5,16 +5,24 @@ This CLI provides wallet management for Casper: create/recover wallets, derive a
 ## Build and run
 
 ```bash
-cargo build
-cargo run -- wallet --help
+cargo build -p casper-cli
+cargo run -p casper-cli -- wallet --help
 ```
+
+Create a release tarball for the host platform:
+
+```bash
+cargo xtask package
+```
+
+The output is written to `dist/casper-cli-{version}-{target}.tar.gz`.
 
 ## Storage layout
 
 By default, wallets are stored under your OS config directory (for example, `~/Library/Application Support/casper-cli` on macOS). You can configure the secret storage backend in `config.toml`:
 
 ```bash
-cargo run -- config edit
+cargo run -p casper-cli -- config edit
 ```
 
 The layout under the base directory (file storage backend):
@@ -31,19 +39,19 @@ When using `storage.type = "keyring"`, secrets are stored in the OS keyring inst
 Creates a new wallet. BIP-39 is the default.
 
 ```bash
-cargo run -- wallet create mywallet
+cargo run -p casper-cli -- wallet create mywallet
 ```
 
 Seeded (deterministic) wallets:
 
 ```bash
-cargo run -- wallet create mywallet --seed "my-seed" --domain "my-domain"
+cargo run -p casper-cli -- wallet create mywallet --seed "my-seed" --domain "my-domain"
 ```
 
 Unencrypted (unsafe, for local dev only, file storage only):
 
 ```bash
-cargo run -- wallet create mywallet --unencrypted
+cargo run -p casper-cli -- wallet create mywallet --unencrypted
 ```
 
 > [!NOTE]
@@ -55,7 +63,7 @@ cargo run -- wallet create mywallet --unencrypted
 Recovers a wallet from a BIP-39 mnemonic. This will prompt for the mnemonic and optional passphrase.
 
 ```bash
-cargo run -- wallet recover mywallet
+cargo run -p casper-cli -- wallet recover mywallet
 ```
 
 ### wallet list
@@ -63,7 +71,7 @@ cargo run -- wallet recover mywallet
 Lists all wallets in the storage directory.
 
 ```bash
-cargo run -- wallet list
+cargo run -p casper-cli -- wallet list
 ```
 
 ### wallet info
@@ -71,7 +79,7 @@ cargo run -- wallet list
 Shows wallet type, encryption state, and known accounts.
 
 ```bash
-cargo run -- wallet info mywallet
+cargo run -p casper-cli -- wallet info mywallet
 ```
 
 ### wallet derive
@@ -79,13 +87,13 @@ cargo run -- wallet info mywallet
 Derives accounts from the wallet root and stores them in metadata. The command fails if the requested range overlaps existing accounts.
 
 ```bash
-cargo run -- wallet derive mywallet --start 0 --count 3
+cargo run -p casper-cli -- wallet derive mywallet --start 0 --count 3
 ```
 
 To show private keys (dangerous):
 
 ```bash
-cargo run -- wallet derive mywallet --show-private
+cargo run -p casper-cli -- wallet derive mywallet --show-private
 ```
 
 ### wallet add
@@ -93,15 +101,15 @@ cargo run -- wallet derive mywallet --show-private
 Adds the next derived account. The account name is optional and defaults to `account-{index}`.
 
 ```bash
-cargo run -- wallet add mywallet
-cargo run -- wallet add mywallet alice
+cargo run -p casper-cli -- wallet add mywallet
+cargo run -p casper-cli -- wallet add mywallet alice
 ```
 
 You can also use the external form:
 
 ```bash
-cargo run -- wallet mywallet add
-cargo run -- wallet mywallet add alice
+cargo run -p casper-cli -- wallet mywallet add
+cargo run -p casper-cli -- wallet mywallet add alice
 ```
 
 ### wallet rename-account
@@ -109,13 +117,13 @@ cargo run -- wallet mywallet add alice
 Renames an existing account in a wallet.
 
 ```bash
-cargo run -- wallet rename-account mywallet old-name new-name
+cargo run -p casper-cli -- wallet rename-account mywallet old-name new-name
 ```
 
 External form:
 
 ```bash
-cargo run -- wallet mywallet rename-account old-name new-name
+cargo run -p casper-cli -- wallet mywallet rename-account old-name new-name
 ```
 
 ### wallet delete
@@ -123,7 +131,7 @@ cargo run -- wallet mywallet rename-account old-name new-name
 Deletes the wallet metadata and secret.
 
 ```bash
-cargo run -- wallet delete mywallet
+cargo run -p casper-cli -- wallet delete mywallet
 ```
 
 ## Network commands
@@ -153,8 +161,8 @@ binary = "127.0.0.1:11102"
 Selects the active network by key or chain name:
 
 ```bash
-cargo run -- network use devnet
-cargo run -- network use casper-dev
+cargo run -p casper-cli -- network use devnet
+cargo run -p casper-cli -- network use casper-dev
 ```
 
 ### network list
@@ -162,7 +170,7 @@ cargo run -- network use casper-dev
 Lists configured networks and highlights which one is active:
 
 ```bash
-cargo run -- network list
+cargo run -p casper-cli -- network list
 ```
 
 ## Balance command
@@ -170,9 +178,9 @@ cargo run -- network list
 Fetches the balance for a wallet account, account hash hex, or a raw public key hex. The active network is read from `config.toml`.
 
 ```bash
-cargo run -- balance mywallet:account-0
-cargo run -- balance 0202c1...deadbeef
-cargo run -- balance <account-hash-hex>
+cargo run -p casper-cli -- balance mywallet:account-0
+cargo run -p casper-cli -- balance 0202c1...deadbeef
+cargo run -p casper-cli -- balance <account-hash-hex>
 ```
 
 ## View account command
@@ -180,9 +188,9 @@ cargo run -- balance <account-hash-hex>
 Fetches account details from the active network and prints named keys.
 
 ```bash
-cargo run -- view-account mywallet:account-0
-cargo run -- view-account <public-key-hex>
-cargo run -- view-account <account-hash-hex>
+cargo run -p casper-cli -- view-account mywallet:account-0
+cargo run -p casper-cli -- view-account <public-key-hex>
+cargo run -p casper-cli -- view-account <account-hash-hex>
 ```
 
 ## Config commands
@@ -192,7 +200,7 @@ cargo run -- view-account <account-hash-hex>
 Opens `config.toml` in your `$EDITOR`:
 
 ```bash
-cargo run -- config edit
+cargo run -p casper-cli -- config edit
 ```
 
 ## Transaction commands
@@ -214,7 +222,7 @@ Examples (from unit tests):
 | `Map<String, U32>` | `0x0200000005000000616c70686101000000040000006265746102000000` | `{alpha: 1, beta: 2}` |
 
 ```bash
-cargo run -- transaction  call --simulate --from devnet:user-1 $CONTRACT_HASH hello
+cargo run -p casper-cli -- transaction  call --simulate --from devnet:user-1 $CONTRACT_HASH hello
 ```
 
 Example output:
@@ -235,11 +243,11 @@ Cleaned up 2 unreferenced tries
 Builds a session transaction from Wasm and submits it to the active network. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. Use `--simulate` to run a local execution engine via the binary port without submitting the transaction. You can also use `tx` as an alias.
 
 ```bash
-cargo run -- transaction put path/to/contract.wasm --payment-amount 2.5 --from mywallet:account-0
-cargo run -- transaction put path/to/contract.wasm --from mywallet:account-0 --install-upgrade
-cargo run -- transaction put path/to/contract.wasm --from mywallet:account-0 \
+cargo run -p casper-cli -- transaction put path/to/contract.wasm --payment-amount 2.5 --from mywallet:account-0
+cargo run -p casper-cli -- transaction put path/to/contract.wasm --from mywallet:account-0 --install-upgrade
+cargo run -p casper-cli -- transaction put path/to/contract.wasm --from mywallet:account-0 \
   --arg flag:Bool=true --arg amount:U512=1000000000000
-cargo run -- transaction put path/to/contract.wasm --from mywallet:account-0 --simulate
+cargo run -p casper-cli -- transaction put path/to/contract.wasm --from mywallet:account-0 --simulate
 ```
 
 ### transaction call
@@ -247,11 +255,11 @@ cargo run -- transaction put path/to/contract.wasm --from mywallet:account-0 --s
 Calls a stored contract by hash (formatted `contract-`/`addressable-entity-` or raw hex) using the `call` entry point. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. Use `--simulate` to run a local execution engine via the binary port without submitting the transaction.
 
 ```bash
-cargo run -- transaction call contract-... --from mywallet:account-0
-cargo run -- tx call <contract-hash-hex> --payment-amount 3.0 --gas-price-tolerance 2 --from mywallet:account-0
-cargo run -- transaction call contract-... --from mywallet:account-0 \
+cargo run -p casper-cli -- transaction call contract-... --from mywallet:account-0
+cargo run -p casper-cli -- tx call <contract-hash-hex> --payment-amount 3.0 --gas-price-tolerance 2 --from mywallet:account-0
+cargo run -p casper-cli -- transaction call contract-... --from mywallet:account-0 \
   --arg recipient:Key=hash-... --arg note:String="hello"
-cargo run -- tx call <contract-hash-hex> --from mywallet:account-0 --simulate
+cargo run -p casper-cli -- tx call <contract-hash-hex> --from mywallet:account-0 --simulate
 ```
 
 ### transaction transfer
@@ -259,10 +267,10 @@ cargo run -- tx call <contract-hash-hex> --from mywallet:account-0 --simulate
 Transfers CSPR from a wallet account to a target account. The recipient can be a wallet/account reference, public key bytes hex, or account hash bytes hex. You can set `--gas-price-tolerance` (default: 1). Use `--simulate` to run a local execution engine via the binary port without submitting the transaction.
 
 ```bash
-cargo run -- tx transfer --from mywallet:account-0 --to mywallet:account-1 --amount 1.25
-cargo run -- tx transfer --from mywallet:account-0 --to <public-key-hex> --amount 10
-cargo run -- tx transfer --from mywallet:account-0 --to <account-hash-hex> --amount 0.5 --gas-price-tolerance 2
-cargo run -- tx transfer --from mywallet:account-0 --to mywallet:account-1 --amount 1.25 --simulate
+cargo run -p casper-cli -- tx transfer --from mywallet:account-0 --to mywallet:account-1 --amount 1.25
+cargo run -p casper-cli -- tx transfer --from mywallet:account-0 --to <public-key-hex> --amount 10
+cargo run -p casper-cli -- tx transfer --from mywallet:account-0 --to <account-hash-hex> --amount 0.5 --gas-price-tolerance 2
+cargo run -p casper-cli -- tx transfer --from mywallet:account-0 --to mywallet:account-1 --amount 1.25 --simulate
 ```
 
 ### Argument format
