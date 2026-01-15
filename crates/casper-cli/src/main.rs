@@ -16,7 +16,7 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(
-    name = "casper",
+    name = "casper-cli",
     version,
     about = "Casper Network command-line interface"
 )]

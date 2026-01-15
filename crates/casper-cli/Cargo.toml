@@ -2,6 +2,12 @@
 name = "casper-cli"
 version = "0.1.0"
 edition = "2024"
+license = "Apache-2.0"
+description = "CLI wallet manager for Casper: create/recover wallets, derive accounts, and deploy smart contracts."
+documentation = "https://docs.rs/casper-cli"
+homepage = "http://veleslabs.xyz"
+repository = "https://github.com/veles-labs/casper-cli"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1"

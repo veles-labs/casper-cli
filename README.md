@@ -5,7 +5,7 @@ This CLI provides wallet management for Casper: create/recover wallets, derive a
 ## Install
 
 - `cargo install casper-cli`
-- Or download a tarball from the GitHub releases page and extract it into your `PATH`.
+- Or download a tarball from the [GitHub releases page](https://github.com/veles-labs/casper-cli/releases) and extract it into your `PATH`.
 
 ## Build and run
 
@@ -13,6 +13,8 @@ This CLI provides wallet management for Casper: create/recover wallets, derive a
 cargo build -p casper-cli
 ./target/debug/casper-cli wallet --help
 ```
+
+## Development
 
 Create a release tarball for the host platform:
 
@@ -328,3 +330,7 @@ Wallet secrets are encrypted at rest by default:
 - Secret files are written atomically and locked down to restrictive permissions (0600 files, 0700 directories on Unix).
 
 You can opt out of encryption with `--unencrypted` for local dev workflows when using file storage, but this stores secrets in plaintext.
+
+## License
+
+Apache-2.0
