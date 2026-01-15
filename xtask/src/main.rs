@@ -4,12 +4,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use flate2::{write::GzEncoder, Compression};
+use flate2::{Compression, write::GzEncoder};
 use serde::Deserialize;
 use tar::Builder;
-use xshell::{cmd, Shell};
+use xshell::{Shell, cmd};
 
 const CLI_NAME: &str = "casper-cli";
 
@@ -78,9 +78,7 @@ fn exe_suffix() -> String {
 }
 
 fn rustc_host_triple(sh: &Shell) -> Result<String> {
-    let stdout = cmd!(sh, "rustc -vV")
-        .read()
-        .context("running rustc -vV")?;
+    let stdout = cmd!(sh, "rustc -vV").read().context("running rustc -vV")?;
     stdout
         .lines()
         .find_map(|line| line.strip_prefix("host: ").map(str::to_string))

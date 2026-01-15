@@ -13,6 +13,7 @@ mod view_account;
 mod wallet;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
@@ -22,6 +23,23 @@ use clap::{Parser, Subcommand};
 )]
 /// Top-level CLI entry point.
 struct Cli {
+    /// Disable interactive prompts when initializing config.
+    #[arg(long, global = true)]
+    no_interactive: bool,
+    /// Force OS keyring storage (overrides config.toml).
+    #[arg(long, global = true, conflicts_with = "file_storage")]
+    keyring: bool,
+    /// Force file-based storage with the provided root path (overrides config.toml).
+    #[arg(
+        long,
+        global = true,
+        value_name = "ROOT_PATH",
+        conflicts_with = "keyring"
+    )]
+    file_storage: Option<PathBuf>,
+    /// Use a custom config.toml path instead of the projectdirs default.
+    #[arg(long, global = true, value_name = "PATH")]
+    config_path: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -47,13 +65,30 @@ enum Command {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let storage = storage::StorageConfig::from_config()?;
+    let config_path = match cli.config_path.clone() {
+        Some(path) => path,
+        None => network::default_config_path()?,
+    };
+    let storage_override = match (cli.keyring, cli.file_storage.as_ref()) {
+        (true, None) => Some(network::StorageOverride::Keyring),
+        (false, Some(path)) => Some(network::StorageOverride::File {
+            root_path: path.display().to_string(),
+        }),
+        _ => None,
+    };
+    let config_options = network::ConfigInitOptions {
+        no_interactive: cli.no_interactive,
+        storage_override,
+    };
+    let config_context = network::ConfigContext::new(config_path, config_options);
+    network::ensure_default_config_with_options(config_context.path(), config_context.options())?;
+    let storage = storage::StorageConfig::from_config(&config_context)?;
     match cli.command {
         Command::Wallet(command) => wallet::handle(&storage, command),
-        Command::Network(command) => network::handle(command),
-        Command::Config(command) => config::handle(command),
-        Command::Balance(command) => balance::handle(&storage, command),
-        Command::Transaction(command) => transaction::handle(&storage, command),
-        Command::ViewAccount(command) => view_account::handle(&storage, command),
+        Command::Network(command) => network::handle(&config_context, command),
+        Command::Config(command) => config::handle(&config_context, command),
+        Command::Balance(command) => balance::handle(&storage, &config_context, command),
+        Command::Transaction(command) => transaction::handle(&storage, &config_context, command),
+        Command::ViewAccount(command) => view_account::handle(&storage, &config_context, command),
     }
 }

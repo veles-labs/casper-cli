@@ -23,10 +23,9 @@ pub struct StorageConfig {
 }
 
 impl StorageConfig {
-    pub fn from_config() -> Result<Self> {
-        let config_path = network::config_path()?;
-        network::ensure_default_config(&config_path)?;
-        Self::from_config_path(&config_path)
+    pub(crate) fn from_config(context: &network::ConfigContext) -> Result<Self> {
+        network::ensure_default_config_with_options(context.path(), context.options())?;
+        Self::from_config_path(context.path(), context.options().storage_override.as_ref())
     }
 
     pub fn base_dir(&self) -> Result<PathBuf> {
@@ -60,7 +59,25 @@ impl StorageConfig {
         }
     }
 
-    fn from_config_path(path: &Path) -> Result<Self> {
+    fn from_config_path(
+        path: &Path,
+        storage_override: Option<&network::StorageOverride>,
+    ) -> Result<Self> {
+        if let Some(override_choice) = storage_override {
+            return Ok(Self {
+                backend: match override_choice {
+                    network::StorageOverride::Keyring => StorageBackend::Keyring,
+                    network::StorageOverride::File { root_path } => {
+                        if root_path.trim().is_empty() {
+                            bail!("--file-storage root_path is empty");
+                        }
+                        StorageBackend::File {
+                            base_dir: file_base_dir_from_path(root_path)?,
+                        }
+                    }
+                },
+            });
+        }
         let data = fs::read_to_string(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
         let config: StorageConfigToml =

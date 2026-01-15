@@ -24,6 +24,13 @@ cargo xtask package
 
 The output is written to `dist/casper-cli-{version}-{target}.tar.gz`.
 
+## Global options
+
+- `--no-interactive` - Disable prompts when initializing `config.toml` (requires `--keyring` or `--file-storage` if the file is missing).
+- `--keyring` - Force OS keyring storage for this run (overrides `config.toml`).
+- `--file-storage <ROOT_PATH>` - Force file-based storage for this run using the provided root path (overrides `config.toml`).
+- `--config-path <PATH>` - Use a custom `config.toml` path instead of the default projectdirs location.
+
 ## Storage layout
 
 By default, wallets are stored under your OS config directory (for example, `~/Library/Application Support/casper-cli` on macOS). You can configure the secret storage backend in `config.toml`:
@@ -143,17 +150,17 @@ casper-cli wallet delete mywallet
 
 ## Network commands
 
-Networks are stored in `config.toml` under the same config directory as wallets. If the file is missing, it is created with a default `devnet` entry:
+Networks are stored in `config.toml` under the same config directory as wallets. If the file is missing, `casper-cli` will prompt for the storage backend and then create it with a default `devnet` entry:
 
 ```toml
 active = "devnet"
 
 [storage]
-type = "file"
-root_path = "/Users/you/Library/Application Support/casper-cli"
+type = "keyring"
 
-# Or use the OS keyring (service name is always "casper-cli")
-# type = "keyring"
+# For file-based storage:
+# type = "file"
+# root_path = "/Users/you/Library/Application Support/casper-cli"
 
 [networks.devnet]
 chain_name = "casper-dev"

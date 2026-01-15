@@ -18,10 +18,14 @@ pub struct BalanceArgs {
     name: String,
 }
 
-pub fn handle(storage: &StorageConfig, args: BalanceArgs) -> Result<()> {
+pub fn handle(
+    storage: &StorageConfig,
+    context: &network::ConfigContext,
+    args: BalanceArgs,
+) -> Result<()> {
     let name = args.name;
     let account_identifier = resolve_account_identifier(storage, &name)?;
-    let (network_name, rpc_endpoint) = network::active_network_rpc()?;
+    let (network_name, rpc_endpoint) = network::active_network_rpc(context)?;
 
     let runtime = Runtime::new().context("failed to start async runtime")?;
 

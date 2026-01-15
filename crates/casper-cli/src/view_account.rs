@@ -19,10 +19,14 @@ pub struct ViewAccountArgs {
     name: String,
 }
 
-pub fn handle(storage: &StorageConfig, args: ViewAccountArgs) -> Result<()> {
+pub fn handle(
+    storage: &StorageConfig,
+    context: &network::ConfigContext,
+    args: ViewAccountArgs,
+) -> Result<()> {
     let name = args.name;
     let account_identifier = resolve_account_identifier(storage, &name)?;
-    let (network_name, rpc_endpoint) = network::active_network_rpc()?;
+    let (network_name, rpc_endpoint) = network::active_network_rpc(context)?;
 
     let runtime = Runtime::new().context("failed to start async runtime")?;
     let result = runtime.block_on(async {

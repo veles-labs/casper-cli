@@ -112,15 +112,23 @@ pub struct TransferArgs {
     simulate: bool,
 }
 
-pub fn handle(storage: &StorageConfig, args: TxArgs) -> Result<()> {
+pub fn handle(
+    storage: &StorageConfig,
+    context: &network::ConfigContext,
+    args: TxArgs,
+) -> Result<()> {
     match args.command {
-        TxCommand::Put(command) => put_session(storage, command),
-        TxCommand::Call(command) => call_contract(storage, command),
-        TxCommand::Transfer(command) => transfer(storage, command),
+        TxCommand::Put(command) => put_session(storage, context, command),
+        TxCommand::Call(command) => call_contract(storage, context, command),
+        TxCommand::Transfer(command) => transfer(storage, context, command),
     }
 }
 
-fn put_session(storage: &StorageConfig, args: PutArgs) -> Result<()> {
+fn put_session(
+    storage: &StorageConfig,
+    context: &network::ConfigContext,
+    args: PutArgs,
+) -> Result<()> {
     let module_bytes =
         fs::read(&args.wasm).with_context(|| format!("failed to read {}", args.wasm.display()))?;
     let runtime = TransactionRuntimeParams::VmCasperV1;
@@ -135,8 +143,8 @@ fn put_session(storage: &StorageConfig, args: PutArgs) -> Result<()> {
     };
     let (wallet_name, account_name) = parse_wallet_account(&args.from)?;
     let secret_key = wallet::resolve_account_secret_key(storage, &wallet_name, &account_name)?;
-    let chain_name = network::active_network_chain_name()?;
-    let (network_name, rpc_endpoint) = network::active_network_rpc()?;
+    let chain_name = network::active_network_chain_name(context)?;
+    let (network_name, rpc_endpoint) = network::active_network_rpc(context)?;
 
     let runtime_args = parse_runtime_args(&args.args)?;
     let builder =
@@ -149,7 +157,7 @@ fn put_session(storage: &StorageConfig, args: PutArgs) -> Result<()> {
     let tx = builder.build()?;
     let transaction = Transaction::V1(tx);
     if args.simulate {
-        return simulate_transaction(storage, transaction);
+        return simulate_transaction(storage, context, transaction);
     }
     let runtime = Runtime::new().context("failed to start async runtime")?;
     let tx_hash = runtime.block_on(async {
@@ -161,7 +169,11 @@ fn put_session(storage: &StorageConfig, args: PutArgs) -> Result<()> {
     Ok(())
 }
 
-fn call_contract(storage: &StorageConfig, args: CallArgs) -> Result<()> {
+fn call_contract(
+    storage: &StorageConfig,
+    context: &network::ConfigContext,
+    args: CallArgs,
+) -> Result<()> {
     let contract_hash = parse_contract_hash(&args.contract_hash)?;
     let runtime = TransactionRuntimeParams::VmCasperV1;
     let payment_amount = utils::u512_to_u64(utils::parse_cspr_to_motes(
@@ -175,8 +187,8 @@ fn call_contract(storage: &StorageConfig, args: CallArgs) -> Result<()> {
     };
     let (wallet_name, account_name) = parse_wallet_account(&args.from)?;
     let secret_key = wallet::resolve_account_secret_key(storage, &wallet_name, &account_name)?;
-    let chain_name = network::active_network_chain_name()?;
-    let (network_name, rpc_endpoint) = network::active_network_rpc()?;
+    let chain_name = network::active_network_chain_name(context)?;
+    let (network_name, rpc_endpoint) = network::active_network_rpc(context)?;
 
     let runtime_args = parse_runtime_args(&args.args)?;
     let builder = TransactionV1Builder::new_targeting_invocable_entity(
@@ -193,7 +205,7 @@ fn call_contract(storage: &StorageConfig, args: CallArgs) -> Result<()> {
     let tx = builder.build()?;
     let transaction = Transaction::V1(tx);
     if args.simulate {
-        return simulate_transaction(storage, transaction);
+        return simulate_transaction(storage, context, transaction);
     }
     let runtime = Runtime::new().context("failed to start async runtime")?;
     let tx_hash = runtime.block_on(async {
@@ -205,13 +217,17 @@ fn call_contract(storage: &StorageConfig, args: CallArgs) -> Result<()> {
     Ok(())
 }
 
-fn transfer(storage: &StorageConfig, args: TransferArgs) -> Result<()> {
+fn transfer(
+    storage: &StorageConfig,
+    context: &network::ConfigContext,
+    args: TransferArgs,
+) -> Result<()> {
     let amount = utils::parse_cspr_to_motes("transfer amount", &args.amount)?;
     let target = resolve_transfer_target(storage, &args.to)?;
     let (wallet_name, account_name) = parse_wallet_account(&args.from)?;
     let secret_key = wallet::resolve_account_secret_key(storage, &wallet_name, &account_name)?;
-    let chain_name = network::active_network_chain_name()?;
-    let (network_name, rpc_endpoint) = network::active_network_rpc()?;
+    let chain_name = network::active_network_chain_name(context)?;
+    let (network_name, rpc_endpoint) = network::active_network_rpc(context)?;
 
     let pricing_mode = PricingMode::PaymentLimited {
         payment_amount: 2_500_000_000u64, // This is a standard payment of 2.5 CSPR which is ignored by the host anyway.
@@ -227,7 +243,7 @@ fn transfer(storage: &StorageConfig, args: TransferArgs) -> Result<()> {
     let tx = builder.build()?;
     let transaction = Transaction::V1(tx);
     if args.simulate {
-        return simulate_transaction(storage, transaction);
+        return simulate_transaction(storage, context, transaction);
     }
     let runtime = Runtime::new().context("failed to start async runtime")?;
     let tx_hash = runtime.block_on(async {
@@ -262,9 +278,13 @@ fn parse_runtime_args(values: &[String]) -> Result<RuntimeArgs> {
     Ok(runtime_args)
 }
 
-fn simulate_transaction(storage: &StorageConfig, transaction: Transaction) -> Result<()> {
-    let (network_name, binary_port) = network::active_network_binary_port()?;
-    let (_network_name, rpc) = network::active_network_rpc()?;
+fn simulate_transaction(
+    storage: &StorageConfig,
+    context: &network::ConfigContext,
+    transaction: Transaction,
+) -> Result<()> {
+    let (network_name, binary_port) = network::active_network_binary_port(context)?;
+    let (_network_name, rpc) = network::active_network_rpc(context)?;
 
     let base_dir = storage.base_dir()?;
     let runtime_dir = base_dir.join("global-state-cache").join(&network_name);
