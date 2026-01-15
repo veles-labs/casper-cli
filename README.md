@@ -98,32 +98,25 @@ casper-cli wallet info mywallet
 
 ### wallet derive
 
-Derives accounts from the wallet root and stores them in metadata. The command fails if the requested range overlaps existing accounts.
+Derives accounts from the wallet root and stores them in metadata. The command fails if the requested range overlaps existing accounts. Use `--name` with a `tinytemplate` template to control account names; available fields are `index`, `index1`, `wallet`, `network`, and `chain_name`. The default is `account-{index}`.
 
 ```bash
 casper-cli wallet derive mywallet --start 0 --count 3
+```
+
+Custom name templates:
+
+```bash
+casper-cli wallet derive mywallet --count 2 --name "{wallet}-{network}-{index1}"
+casper-cli wallet derive mywallet --count 2 --name "{chain_name}-account-{index}"
+casper-cli wallet derive devnet --start 0 --count 4 --name "validator-{index1}"
+casper-cli wallet derive devnet --start 100 --count 4 --name "user-{index1}"
 ```
 
 To show private keys (dangerous):
 
 ```bash
 casper-cli wallet derive mywallet --show-private
-```
-
-### wallet add
-
-Adds the next derived account. The account name is optional and defaults to `account-{index}`.
-
-```bash
-casper-cli wallet add mywallet
-casper-cli wallet add mywallet alice
-```
-
-You can also use the external form:
-
-```bash
-casper-cli wallet mywallet add
-casper-cli wallet mywallet add alice
 ```
 
 ### wallet rename-account

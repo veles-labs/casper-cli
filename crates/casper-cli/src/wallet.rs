@@ -1,3 +1,4 @@
+use crate::network::{self, ConfigContext};
 use crate::secure_storage::keyring;
 use crate::secure_storage::{RootSecret, SecureStorage, StorageBackendKind, StoreMode};
 use crate::storage::StorageConfig;
@@ -10,8 +11,10 @@ use clap::{Args, Subcommand};
 use comfy_table::{Cell, Table};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use tinytemplate::TinyTemplate;
 
 const WALLET_DIR_NAME: &str = "wallets";
 const DEFAULT_PATH_PREFIX: &str = "m/44'/506'/0'/0";
@@ -36,8 +39,6 @@ pub enum WalletCommand {
     Info(InfoArgs),
     /// Derive one or more accounts from the wallet root.
     Derive(DeriveArgs),
-    /// Add the next derived account to a wallet.
-    Add(AddArgs),
     /// Rename an account inside a wallet.
     #[command(name = "rename-account")]
     RenameAccount(RenameArgs),
@@ -94,6 +95,9 @@ pub struct DeleteArgs {
 /// Arguments for deriving accounts.
 pub struct DeriveArgs {
     /// Name of the wallet.
+    wallet_name: String,
+    /// Account name template for derived accounts.
+    #[arg(long, default_value = "account-{index}", value_name = "TEMPLATE")]
     name: String,
     /// Number of accounts to derive.
     #[arg(long, default_value_t = 1)]
@@ -106,13 +110,13 @@ pub struct DeriveArgs {
     show_private: bool,
 }
 
-#[derive(Args)]
-/// Arguments for adding the next derived account.
-pub struct AddArgs {
-    /// Name of the wallet.
-    wallet_name: String,
-    /// Name for the account.
-    account_name: Option<String>,
+#[derive(Serialize)]
+struct DeriveNameContext<'a> {
+    index: u32,
+    index1: u32,
+    wallet: &'a str,
+    network: &'a str,
+    chain_name: &'a str,
 }
 
 #[derive(Args)]
@@ -152,14 +156,13 @@ struct DerivedAccount {
     public_key: String,
 }
 
-pub fn handle(storage: &StorageConfig, args: WalletArgs) -> Result<()> {
+pub fn handle(storage: &StorageConfig, context: &ConfigContext, args: WalletArgs) -> Result<()> {
     match args.command {
         WalletCommand::Create(command) => create_wallet(storage, command),
         WalletCommand::Recover(command) => recover_wallet(storage, command),
         WalletCommand::List => wallet_list(storage),
         WalletCommand::Info(command) => wallet_info(storage, command),
-        WalletCommand::Derive(command) => wallet_derive(storage, command),
-        WalletCommand::Add(command) => wallet_add(storage, command),
+        WalletCommand::Derive(command) => wallet_derive(storage, context, command),
         WalletCommand::RenameAccount(command) => wallet_rename(storage, command),
         WalletCommand::Delete(command) => wallet_delete(storage, command),
         WalletCommand::External(command) => wallet_external(storage, command),
@@ -398,13 +401,13 @@ fn wallet_info(storage: &StorageConfig, args: InfoArgs) -> Result<()> {
     Ok(())
 }
 
-fn wallet_derive(storage: &StorageConfig, args: DeriveArgs) -> Result<()> {
-    let wallet_storage = wallet_storage(storage, &args.name)?;
-    ensure_wallet_exists(&wallet_storage, &args.name)?;
+fn wallet_derive(storage: &StorageConfig, context: &ConfigContext, args: DeriveArgs) -> Result<()> {
+    let wallet_storage = wallet_storage(storage, &args.wallet_name)?;
+    ensure_wallet_exists(&wallet_storage, &args.wallet_name)?;
     let mut metadata = load_metadata(&wallet_storage.metadata_path)?;
     let root_secret = wallet_storage
         .storage
-        .load(&args.name)
+        .load(&args.wallet_name)
         .map_err(|err| anyhow!(err.to_string()))?;
     let seed = root_seed(&root_secret)?;
 
@@ -418,9 +421,51 @@ fn wallet_derive(storage: &StorageConfig, args: DeriveArgs) -> Result<()> {
     {
         bail!("requested derivation range overlaps existing accounts");
     }
+
+    let name_template = args.name.as_str();
+    if name_template.is_empty() {
+        bail!("account name template cannot be empty");
+    }
+    let (network_name, chain_name) = network::active_network_name_and_chain_name(context)?;
+    let mut names = TinyTemplate::new();
+    names
+        .add_template("name", name_template)
+        .map_err(|err| anyhow!("invalid account name template: {err}"))?;
+    let mut seen_names = metadata
+        .accounts
+        .iter()
+        .map(|account| account.name.clone())
+        .collect::<HashSet<_>>();
+    let mut derived_names = Vec::new();
+    for index in args.start..end {
+        let index1 = index
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("index1 overflows for index {index}"))?;
+        let context = DeriveNameContext {
+            index,
+            index1,
+            wallet: &args.wallet_name,
+            network: &network_name,
+            chain_name: &chain_name,
+        };
+        let name = names
+            .render("name", &context)
+            .map_err(|err| anyhow!("failed to render account name for index {index}: {err}"))?;
+        if name.is_empty() {
+            bail!("derived account name cannot be empty");
+        }
+        if name.starts_with('-') {
+            bail!("derived account name cannot start with '-'");
+        }
+        if !seen_names.insert(name.clone()) {
+            bail!("account name '{name}' already exists");
+        }
+        derived_names.push((index, name));
+    }
+
     let mut table = Table::new();
     table.set_header(vec!["Name", "Path", "Public Key"]);
-    for index in args.start..end {
+    for (index, name) in derived_names {
         let path = format!("{}/{}", DEFAULT_PATH_PREFIX, index);
         let derivation_path = path.parse::<DerivationPath>()?;
         let xprv = XPrv::derive_from_path(&seed, &derivation_path)?;
@@ -433,7 +478,6 @@ fn wallet_derive(storage: &StorageConfig, args: DeriveArgs) -> Result<()> {
         };
 
         let public_key_hex = hex::encode(&public_key);
-        let name = default_account_name(index);
         table.add_row(vec![
             Cell::new(&name),
             Cell::new(&path),
@@ -456,64 +500,6 @@ fn wallet_derive(storage: &StorageConfig, args: DeriveArgs) -> Result<()> {
     if args.count > 0 {
         println!("{table}");
     }
-
-    Ok(())
-}
-
-fn wallet_add(storage: &StorageConfig, args: AddArgs) -> Result<()> {
-    let wallet_storage = wallet_storage(storage, &args.wallet_name)?;
-    ensure_wallet_exists(&wallet_storage, &args.wallet_name)?;
-    let mut metadata = load_metadata(&wallet_storage.metadata_path)?;
-    let root_secret = wallet_storage
-        .storage
-        .load(&args.wallet_name)
-        .map_err(|err| anyhow!(err.to_string()))?;
-
-    let next_index = metadata
-        .accounts
-        .iter()
-        .map(|account| account.index)
-        .max()
-        .map(|index| index.saturating_add(1))
-        .unwrap_or(0);
-
-    let account_name = args
-        .account_name
-        .unwrap_or_else(|| default_account_name(next_index));
-    if account_name.is_empty() {
-        bail!("account name cannot be empty");
-    }
-    if account_name.starts_with('-') {
-        bail!("account name cannot start with '-'");
-    }
-    if metadata
-        .accounts
-        .iter()
-        .any(|account| account.name == account_name)
-    {
-        bail!("account name '{}' already exists", account_name);
-    }
-
-    let seed = root_seed(&root_secret)?;
-    let (path, public_key_hex) = derive_account(&seed, next_index)?;
-
-    add_account(
-        &mut metadata,
-        &account_name,
-        next_index,
-        &path,
-        &public_key_hex,
-    );
-    save_metadata(&wallet_storage.metadata_path, &metadata)?;
-
-    let mut table = Table::new();
-    table.set_header(vec!["Name", "Path", "Public Key"]);
-    table.add_row(vec![
-        Cell::new(&account_name),
-        Cell::new(path),
-        Cell::new(public_key_hex),
-    ]);
-    println!("{table}");
 
     Ok(())
 }
@@ -583,22 +569,6 @@ fn wallet_delete(storage: &StorageConfig, args: DeleteArgs) -> Result<()> {
 }
 
 fn wallet_external(storage: &StorageConfig, args: Vec<String>) -> Result<()> {
-    if args.len() >= 2 && args[1] == "add" {
-        if args.len() == 3 && (args[2] == "--help" || args[2] == "-h") {
-            print_wallet_add_help();
-            return Ok(());
-        }
-        if args.len() > 3 {
-            bail!("usage: casper wallet <wallet-name> add [account-name]");
-        }
-        return wallet_add(
-            storage,
-            AddArgs {
-                wallet_name: args[0].clone(),
-                account_name: args.get(2).cloned(),
-            },
-        );
-    }
     if args.len() >= 2 && args[1] == "rename" {
         if args.len() == 4 && (args[3] == "--help" || args[3] == "-h") {
             print_wallet_rename_help();
@@ -635,13 +605,6 @@ fn wallet_external(storage: &StorageConfig, args: Vec<String>) -> Result<()> {
     }
 
     bail!("unsupported wallet command: {}", args.join(" "))
-}
-
-fn print_wallet_add_help() {
-    println!("Usage: casper wallet <wallet-name> add [account-name]");
-    println!();
-    println!("Adds the next derived account to the wallet.");
-    println!("If account-name is omitted, defaults to account-{{index}}.");
 }
 
 fn print_wallet_rename_help() {
@@ -818,31 +781,11 @@ fn add_account(
     true
 }
 
-fn default_account_name(index: u32) -> String {
-    format!("account-{}", index)
-}
-
 fn wallet_type_from_secret(secret: &RootSecret) -> (WalletType, String) {
     match secret {
         RootSecret::Bip39 { .. } => (WalletType::Bip39, "bip39".to_string()),
         RootSecret::Seeded { domain, .. } => (WalletType::Seeded, domain.clone()),
     }
-}
-
-fn derive_account(seed: &[u8], index: u32) -> Result<(String, String)> {
-    let path = format!("{}/{}", DEFAULT_PATH_PREFIX, index);
-    let derivation_path = path.parse::<DerivationPath>()?;
-    let xprv = XPrv::derive_from_path(seed, &derivation_path)?;
-    let public_key_bytes = xprv.public_key().to_bytes();
-
-    let public_key = {
-        let mut casper_public_key = public_key_bytes.to_vec();
-        casper_public_key.insert(0, 0x02); // 1 indicates secp256k1 key
-        casper_public_key
-    };
-
-    let public_key_hex = hex::encode(&public_key);
-    Ok((path, public_key_hex))
 }
 
 fn root_seed(root_secret: &RootSecret) -> Result<Vec<u8>> {

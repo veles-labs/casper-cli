@@ -282,6 +282,25 @@ pub(crate) fn active_network_binary_port(context: &ConfigContext) -> Result<(Str
     Ok((active, binary_port.to_string()))
 }
 
+pub(crate) fn active_network_name_and_chain_name(
+    context: &ConfigContext,
+) -> Result<(String, String)> {
+    let config_path = context.path();
+    let config = load_or_init_config_with_options(config_path, context.options())?;
+    let active = config
+        .active
+        .clone()
+        .ok_or_else(|| anyhow!("active network not set"))?;
+    let entry = config
+        .networks
+        .get(&active)
+        .ok_or_else(|| anyhow!("active network '{active}' not found"))?;
+    if entry.chain_name.trim().is_empty() {
+        bail!("active network '{active}' has no chain name configured");
+    }
+    Ok((active, entry.chain_name.clone()))
+}
+
 pub(crate) fn active_network_chain_name(context: &ConfigContext) -> Result<String> {
     let config_path = context.path();
     let config = load_or_init_config_with_options(config_path, context.options())?;
@@ -408,7 +427,9 @@ fn expand_tilde(path: &str) -> String {
         if let Some(home) = dirs::home_dir() {
             return home.join(rest).display().to_string();
         }
-    } else if path == "~" && let Some(home) = dirs::home_dir() {
+    } else if path == "~"
+        && let Some(home) = dirs::home_dir()
+    {
         return home.display().to_string();
     }
     path.to_string()

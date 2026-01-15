@@ -84,7 +84,7 @@ fn main() -> Result<()> {
     network::ensure_default_config_with_options(config_context.path(), config_context.options())?;
     let storage = storage::StorageConfig::from_config(&config_context)?;
     match cli.command {
-        Command::Wallet(command) => wallet::handle(&storage, command),
+        Command::Wallet(command) => wallet::handle(&storage, &config_context, command),
         Command::Network(command) => network::handle(&config_context, command),
         Command::Config(command) => config::handle(&config_context, command),
         Command::Balance(command) => balance::handle(&storage, &config_context, command),
