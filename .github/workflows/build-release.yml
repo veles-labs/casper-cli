@@ -3,7 +3,9 @@ name: Build and Attach Release Assets
 on:
   release:
     types: [published]
-  workflow_dispatch:
+  push:
+    tags:
+      - "*"
 
 permissions:
   contents: write
