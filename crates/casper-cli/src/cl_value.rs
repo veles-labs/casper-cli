@@ -706,6 +706,7 @@ mod tests {
     use super::{cl_value_to_string, parse_cl_value};
     use crate::cl_type::MAX_TYPE_NESTING;
     use crate::cl_type::cl_type_to_string;
+    use casper_types::bytesrepr;
     use casper_types::bytesrepr::{
         OPTION_NONE_TAG, OPTION_SOME_TAG, RESULT_ERR_TAG, RESULT_OK_TAG, ToBytes,
     };
@@ -1371,7 +1372,7 @@ mod tests {
     }
     #[test]
     fn formats_collections_and_tuples() {
-        let value = vec![1u8, 2, 3];
+        let value = bytesrepr::Bytes::from(vec![1u8, 2, 3]);
         let value = CLValue::from_t(value).unwrap();
         assert_eq!(cl_value_to_string(&value).unwrap(), "[1, 2, 3]");
 

@@ -4,8 +4,9 @@ use casper_types::account::AccountHash;
 use casper_types::bytesrepr::{Bytes, deserialize_from_slice};
 use casper_types::contracts::ContractHash;
 use casper_types::{
-    AddressableEntityHash, CLType, DEFAULT_ENTRY_POINT_NAME, PricingMode, PublicKey, RuntimeArgs,
-    Transaction, TransactionEntryPoint, TransactionRuntimeParams, TransferTarget, URef,
+    AddressableEntityHash, CLType, DEFAULT_ENTRY_POINT_NAME, DeployHash, Digest, PricingMode,
+    PublicKey, RuntimeArgs, Transaction, TransactionEntryPoint, TransactionHash,
+    TransactionRuntimeParams, TransactionV1Hash, TransferTarget, URef,
 };
 use clap::{Args, Subcommand};
 use std::fs;
@@ -39,6 +40,8 @@ pub enum TxCommand {
     Put(PutArgs),
     /// Call a stored contract by hash.
     Call(CallArgs),
+    /// Fetch transaction execution details by hash.
+    Get(GetArgs),
     /// Transfer tokens to another account.
     Transfer(TransferArgs),
 }
@@ -118,6 +121,19 @@ pub struct TransferArgs {
     simulate: bool,
 }
 
+#[derive(Args)]
+/// Arguments for fetching transaction details.
+pub struct GetArgs {
+    /// Transaction hash hex (or deploy-hash-<hex>/transaction-v1-hash-<hex>).
+    transaction_hash: String,
+    /// Request finalized approvals from the node.
+    #[arg(long)]
+    finalized_approvals: bool,
+    /// Print only the execution_info JSON (or null if missing).
+    #[arg(long)]
+    raw: bool,
+}
+
 pub fn handle(
     storage: &StorageConfig,
     context: &network::ConfigContext,
@@ -126,6 +142,7 @@ pub fn handle(
     match args.command {
         TxCommand::Put(command) => put_session(storage, context, command),
         TxCommand::Call(command) => call_contract(storage, context, command),
+        TxCommand::Get(command) => get_transaction(context, command),
         TxCommand::Transfer(command) => transfer(storage, context, command),
     }
 }
@@ -269,6 +286,56 @@ fn transfer(
     Ok(())
 }
 
+fn get_transaction(context: &network::ConfigContext, args: GetArgs) -> Result<()> {
+    let transaction_hash = parse_transaction_hash(&args.transaction_hash)?;
+    let (network_name, rpc_endpoint) = network::active_network_rpc(context)?;
+
+    let runtime = Runtime::new().context("failed to start async runtime")?;
+    let result = runtime.block_on(async {
+        let client = CasperClient::new(rpc_endpoint);
+        client
+            .get_transaction(transaction_hash, args.finalized_approvals)
+            .await
+    })?;
+
+    if args.raw {
+        if let Some(execution_info) = result.execution_info {
+            let json = serde_json::to_string_pretty(&execution_info)
+                .context("format execution_info as json")?;
+            println!("{json}");
+        } else {
+            println!("null");
+        }
+        return Ok(());
+    }
+
+    println!("Network: {network_name}");
+    match result.execution_info {
+        Some(execution_info) => {
+            println!("Block hash: {:x}", execution_info.block_hash.inner());
+            println!("Block height: {}", execution_info.block_height);
+            if let Some(execution_result) = execution_info.execution_result {
+                let consumed = execution_result.consumed();
+                let consumed_cspr = utils::format_cspr(&consumed);
+                println!("Gas consumed: {consumed_cspr} CSPR");
+                if let Some(error) = execution_result.error_message() {
+                    println!("Execution error: {error}");
+                    bail!("transaction execution failed");
+                } else {
+                    println!("Execution status: success");
+                }
+            } else {
+                println!("Execution result: <missing>");
+            }
+        }
+        None => {
+            println!("Execution info: <missing>");
+        }
+    }
+
+    Ok(())
+}
+
 fn parse_wallet_account(value: &str) -> Result<(String, String)> {
     let (wallet_name, account_name) = value
         .split_once(':')
@@ -290,6 +357,25 @@ fn parse_runtime_args(values: &[String]) -> Result<RuntimeArgs> {
         runtime_args.insert_cl_value(name, cl_value);
     }
     Ok(runtime_args)
+}
+
+fn parse_transaction_hash(input: &str) -> Result<TransactionHash> {
+    let trimmed = input.trim();
+    let (kind, hex) = if let Some(inner) = trimmed.strip_prefix("deploy-hash-") {
+        ("deploy", inner)
+    } else if let Some(inner) = trimmed.strip_prefix("transaction-v1-hash-") {
+        ("v1", inner)
+    } else {
+        ("v1", trimmed)
+    };
+
+    let hex = hex.strip_prefix("0x").unwrap_or(hex);
+    let digest = Digest::from_hex(hex).context("invalid transaction hash hex")?;
+    match kind {
+        "deploy" => Ok(TransactionHash::from(DeployHash::new(digest))),
+        "v1" => Ok(TransactionHash::from(TransactionV1Hash::from(digest))),
+        _ => bail!("unsupported transaction hash format"),
+    }
 }
 
 fn simulate_transaction(
@@ -443,13 +529,58 @@ fn parse_contract_hash(value: &str) -> Result<AddressableEntityHash> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_contract_hash, parse_transfer_target};
+    use super::{parse_contract_hash, parse_transaction_hash, parse_transfer_target};
     use casper_types::bytesrepr::ToBytes;
     use casper_types::contracts::ContractHash;
     use casper_types::crypto::AsymmetricType;
     use casper_types::{
-        AccessRights, AddressableEntityHash, PublicKey, TransferTarget, URef, account::AccountHash,
+        AccessRights, AddressableEntityHash, DeployHash, Digest, PublicKey, TransactionHash,
+        TransactionV1Hash, TransferTarget, URef, account::AccountHash,
     };
+
+    fn sample_digest_hex() -> String {
+        "00".repeat(Digest::LENGTH)
+    }
+
+    #[test]
+    fn parse_transaction_hash_defaults_to_v1() {
+        let hex = sample_digest_hex();
+        let digest = Digest::from_hex(&hex).expect("digest from hex");
+        let parsed = parse_transaction_hash(&hex).expect("parse transaction hash");
+        assert_eq!(
+            parsed,
+            TransactionHash::from(TransactionV1Hash::from(digest))
+        );
+    }
+
+    #[test]
+    fn parse_transaction_hash_accepts_v1_prefix() {
+        let hex = sample_digest_hex();
+        let digest = Digest::from_hex(&hex).expect("digest from hex");
+        let input = format!("transaction-v1-hash-{hex}");
+        let parsed = parse_transaction_hash(&input).expect("parse transaction hash");
+        assert_eq!(
+            parsed,
+            TransactionHash::from(TransactionV1Hash::from(digest))
+        );
+    }
+
+    #[test]
+    fn parse_transaction_hash_accepts_deploy_prefix() {
+        let hex = sample_digest_hex();
+        let digest = Digest::from_hex(&hex).expect("digest from hex");
+        let input = format!("deploy-hash-{hex}");
+        let parsed = parse_transaction_hash(&input).expect("parse transaction hash");
+        assert_eq!(parsed, TransactionHash::from(DeployHash::new(digest)));
+    }
+
+    #[test]
+    fn parse_transaction_hash_rejects_invalid_hex() {
+        let err = parse_transaction_hash("transaction-v1-hash-not-hex")
+            .expect_err("invalid hex should error");
+        let message = format!("{err}");
+        assert!(message.contains("invalid transaction hash hex"));
+    }
 
     #[test]
     fn parses_contract_hash_formatted() {

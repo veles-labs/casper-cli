@@ -66,19 +66,10 @@ pub(crate) enum StorageOverride {
     File { root_path: String },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct ConfigInitOptions {
     pub(crate) no_interactive: bool,
     pub(crate) storage_override: Option<StorageOverride>,
-}
-
-impl Default for ConfigInitOptions {
-    fn default() -> Self {
-        Self {
-            no_interactive: false,
-            storage_override: None,
-        }
-    }
 }
 
 pub(crate) struct ConfigContext {
@@ -117,7 +108,7 @@ fn network_use(context: &ConfigContext, args: NetworkUseArgs) -> Result<()> {
         .cloned()
         .ok_or_else(|| anyhow!("network '{key}' not found"))?;
     config.active = Some(key.clone());
-    save_config(&config_path, &config)?;
+    save_config(config_path, &config)?;
     println!("Active network: {key}");
     println!("Chain name: {}", entry.chain_name);
     println!("REST: {}", entry.rest);
@@ -417,10 +408,8 @@ fn expand_tilde(path: &str) -> String {
         if let Some(home) = dirs::home_dir() {
             return home.join(rest).display().to_string();
         }
-    } else if path == "~" {
-        if let Some(home) = dirs::home_dir() {
-            return home.display().to_string();
-        }
+    } else if path == "~" && let Some(home) = dirs::home_dir() {
+        return home.display().to_string();
     }
     path.to_string()
 }

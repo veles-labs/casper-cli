@@ -278,6 +278,16 @@ casper-cli tx call <contract-hash-hex> --from mywallet:account-0 --simulate
 casper-cli tx call <contract-hash-hex> --from mywallet:account-0 --raw
 ```
 
+### transaction get
+
+Fetches execution details for a transaction by hash. Use `--finalized-approvals` to request finalized approvals and `--raw` to print only the execution info JSON (or `null` if missing).
+
+```bash
+casper-cli tx get <transaction-hash-hex>
+casper-cli tx get <transaction-hash-hex> --finalized-approvals
+casper-cli tx get deploy-hash-<hex> --raw
+```
+
 ### transaction transfer
 
 Transfers CSPR from a wallet account to a target account. The recipient can be a wallet/account reference, public key bytes hex, or account hash bytes hex. You can set `--gas-price-tolerance` (default: 1). Use `--simulate` to run a local execution engine via the binary port without submitting the transaction.
