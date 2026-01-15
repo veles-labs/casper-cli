@@ -7,7 +7,7 @@ description = "CLI wallet manager for Casper: create/recover wallets, derive acc
 documentation = "https://docs.rs/casper-cli"
 homepage = "http://veleslabs.xyz"
 repository = "https://github.com/veles-labs/casper-cli"
-readme = "README.md"
+readme = "../../README.md"
 
 [dependencies]
 anyhow = "1"
