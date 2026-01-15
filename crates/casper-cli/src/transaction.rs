@@ -66,6 +66,9 @@ pub struct PutArgs {
     /// Simulate execution using the network binary port.
     #[arg(long)]
     simulate: bool,
+    /// Print only the transaction hash on success.
+    #[arg(long)]
+    raw: bool,
 }
 
 #[derive(Args)]
@@ -90,6 +93,9 @@ pub struct CallArgs {
     /// Simulate execution using the network binary port.
     #[arg(long)]
     simulate: bool,
+    /// Print only the transaction hash on success.
+    #[arg(long)]
+    raw: bool,
 }
 
 #[derive(Args)]
@@ -165,7 +171,11 @@ fn put_session(
         client.put_transaction(transaction).await
     })?;
     let tx_hash_bytes = tx_hash.digest();
-    println!("Transaction submitted to {network_name}: {tx_hash_bytes:x}");
+    if args.raw {
+        println!("{tx_hash_bytes:x}");
+    } else {
+        println!("Transaction submitted to {network_name}: {tx_hash_bytes:x}");
+    }
     Ok(())
 }
 
@@ -213,7 +223,11 @@ fn call_contract(
         client.put_transaction(transaction).await
     })?;
     let tx_hash_bytes = tx_hash.digest();
-    println!("Contract call submitted to {network_name}: {tx_hash_bytes:x}");
+    if args.raw {
+        println!("{tx_hash_bytes:x}");
+    } else {
+        println!("Contract call submitted to {network_name}: {tx_hash_bytes:x}");
+    }
     Ok(())
 }
 

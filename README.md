@@ -262,6 +262,7 @@ casper-cli transaction put path/to/contract.wasm --from mywallet:account-0 --ins
 casper-cli transaction put path/to/contract.wasm --from mywallet:account-0 \
   --arg flag:Bool=true --arg amount:U512=1000000000000
 casper-cli transaction put path/to/contract.wasm --from mywallet:account-0 --simulate
+casper-cli transaction put path/to/contract.wasm --from mywallet:account-0 --raw
 ```
 
 ### transaction call
@@ -274,6 +275,7 @@ casper-cli tx call <contract-hash-hex> --payment-amount 3.0 --gas-price-toleranc
 casper-cli transaction call contract-... --from mywallet:account-0 \
   --arg recipient:Key=hash-... --arg note:String="hello"
 casper-cli tx call <contract-hash-hex> --from mywallet:account-0 --simulate
+casper-cli tx call <contract-hash-hex> --from mywallet:account-0 --raw
 ```
 
 ### transaction transfer
