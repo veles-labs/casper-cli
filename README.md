@@ -98,7 +98,7 @@ casper-cli wallet info mywallet
 
 ### wallet derive
 
-Derives accounts from the wallet root and stores them in metadata. The command fails if the requested range overlaps existing accounts. Use `--name` with a `tinytemplate` template to control account names; available fields are `index`, `index1`, `wallet`, `network`, and `chain_name`. The default is `account-{index}`.
+Derives accounts from the wallet root and stores them in metadata. The command fails if the requested range overlaps existing accounts. Use `--name` with a `tinytemplate` template to control account names; the DeriveNameContext fields are `index` (0-based), `index1` (1-based), `wallet` (wallet name), `network` (active network key), and `chain_name` (active network chain name). The default is `account-{index}`.
 
 ```bash
 casper-cli wallet derive mywallet --start 0 --count 3
@@ -260,15 +260,18 @@ casper-cli transaction put path/to/contract.wasm --from mywallet:account-0 --raw
 
 ### transaction call
 
-Calls a stored contract by hash (formatted `contract-`/`addressable-entity-` or raw hex) using the `call` entry point. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. Use `--simulate` to run a local execution engine via the binary port without submitting the transaction.
+Calls a stored contract by hash (formatted `contract-`/`addressable-entity-` or raw hex) using the `call` entry point. To call by name, pass the named key alias directly. Use `--package` to interpret the target as a package hash (latest version by default) and `--version` with `--package` to select a specific package version. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. Use `--simulate` to run a local execution engine via the binary port without submitting the transaction.
 
 ```bash
-casper-cli transaction call contract-... --from mywallet:account-0
-casper-cli tx call <contract-hash-hex> --payment-amount 3.0 --gas-price-tolerance 2 --from mywallet:account-0
-casper-cli transaction call contract-... --from mywallet:account-0 \
+casper-cli transaction call contract-... entry_point --from mywallet:account-0
+casper-cli tx call <contract-hash-hex> entry_point --payment-amount 3.0 --gas-price-tolerance 2 --from mywallet:account-0
+casper-cli transaction call contract-... entry_point --from mywallet:account-0 \
   --arg recipient:Key=hash-... --arg note:String="hello"
-casper-cli tx call <contract-hash-hex> --from mywallet:account-0 --simulate
-casper-cli tx call <contract-hash-hex> --from mywallet:account-0 --raw
+casper-cli tx call my_contract entry_point --from mywallet:account-0
+casper-cli tx call package-... entry_point --package --from mywallet:account-0
+casper-cli tx call my_package entry_point --package --version 3 --from mywallet:account-0
+casper-cli tx call <contract-hash-hex> entry_point --from mywallet:account-0 --simulate
+casper-cli tx call <contract-hash-hex> entry_point --from mywallet:account-0 --raw
 ```
 
 ### transaction get
@@ -283,13 +286,14 @@ casper-cli tx get deploy-hash-<hex> --raw
 
 ### transaction transfer
 
-Transfers CSPR from a wallet account to a target account. The recipient can be a wallet/account reference, public key bytes hex, or account hash bytes hex. You can set `--gas-price-tolerance` (default: 1). Use `--simulate` to run a local execution engine via the binary port without submitting the transaction.
+Transfers CSPR from a wallet account to a target account. The recipient can be a wallet/account reference, public key bytes hex, or account hash bytes hex. You can set `--gas-price-tolerance` (default: 1). Use `--simulate` to run a local execution engine via the binary port without submitting the transaction, or `--raw` to print only the transaction hash.
 
 ```bash
 casper-cli tx transfer --from mywallet:account-0 --to mywallet:account-1 --amount 1.25
 casper-cli tx transfer --from mywallet:account-0 --to <public-key-hex> --amount 10
 casper-cli tx transfer --from mywallet:account-0 --to <account-hash-hex> --amount 0.5 --gas-price-tolerance 2
 casper-cli tx transfer --from mywallet:account-0 --to mywallet:account-1 --amount 1.25 --simulate
+casper-cli tx transfer --from mywallet:account-0 --to mywallet:account-1 --amount 1.25 --raw
 ```
 
 ### Argument format

@@ -4,9 +4,9 @@ use casper_types::account::AccountHash;
 use casper_types::bytesrepr::{Bytes, deserialize_from_slice};
 use casper_types::contracts::ContractHash;
 use casper_types::{
-    AddressableEntityHash, CLType, DEFAULT_ENTRY_POINT_NAME, DeployHash, Digest, PricingMode,
-    PublicKey, RuntimeArgs, Transaction, TransactionEntryPoint, TransactionHash,
-    TransactionRuntimeParams, TransactionV1Hash, TransferTarget, URef,
+    AddressableEntityHash, CLType, DeployHash, Digest, EntityVersion, PackageHash, PricingMode,
+    PublicKey, RuntimeArgs, Transaction, TransactionHash, TransactionRuntimeParams,
+    TransactionV1Hash, TransferTarget, URef,
 };
 use clap::{Args, Subcommand};
 use std::fs;
@@ -77,7 +77,8 @@ pub struct PutArgs {
 #[derive(Args)]
 /// Arguments for calling a stored contract.
 pub struct CallArgs {
-    /// Contract hash (contract-/addressable-entity- prefix or raw hex).
+    /// Contract hash (contract-/addressable-entity- prefix or raw hex), package hash with --package,
+    /// or named key alias.
     contract_hash: String,
     /// Contract entry point name.
     entry_point: String,
@@ -93,6 +94,12 @@ pub struct CallArgs {
     /// Runtime argument in the form name:cltype=value or name=value (hex for Any).
     #[arg(long = "arg", value_name = "NAME[:CLTYPE]=VALUE")]
     args: Vec<String>,
+    /// Interpret the contract hash as a package hash.
+    #[arg(long)]
+    package: bool,
+    /// Package version (requires --package).
+    #[arg(long, value_name = "VERSION")]
+    version: Option<EntityVersion>,
     /// Simulate execution using the network binary port.
     #[arg(long)]
     simulate: bool,
@@ -119,6 +126,9 @@ pub struct TransferArgs {
     /// Simulate execution using the network binary port.
     #[arg(long)]
     simulate: bool,
+    /// Print only the transaction hash on success.
+    #[arg(long)]
+    raw: bool,
 }
 
 #[derive(Args)]
@@ -201,7 +211,9 @@ fn call_contract(
     context: &network::ConfigContext,
     args: CallArgs,
 ) -> Result<()> {
-    let contract_hash = parse_contract_hash(&args.contract_hash)?;
+    if args.version.is_some() && !args.package {
+        bail!("--version requires --package");
+    }
     let runtime = TransactionRuntimeParams::VmCasperV1;
     let payment_amount = utils::u512_to_u64(utils::parse_cspr_to_motes(
         "payment amount",
@@ -218,12 +230,46 @@ fn call_contract(
     let (network_name, rpc_endpoint) = network::active_network_rpc(context)?;
 
     let runtime_args = parse_runtime_args(&args.args)?;
-    let builder = TransactionV1Builder::new_targeting_invocable_entity(
-        contract_hash,
-        DEFAULT_ENTRY_POINT_NAME,
-        runtime,
-    )
-    .with_entry_point(TransactionEntryPoint::Custom(args.entry_point))
+    let entry_point = args.entry_point.as_str();
+    let maybe_version = args.version;
+    let target = args.contract_hash.trim();
+    if target.is_empty() {
+        if args.package {
+            bail!("package hash cannot be empty");
+        }
+        bail!("contract hash cannot be empty");
+    }
+    let builder = if args.package {
+        if looks_like_package_hash(target) {
+            let package_hash = parse_package_hash(target)?;
+            TransactionV1Builder::new_targeting_package(
+                package_hash,
+                maybe_version,
+                entry_point,
+                runtime,
+            )
+        } else if maybe_version.is_some() {
+            TransactionV1Builder::new_targeting_package_via_alias_with_version_key(
+                target,
+                maybe_version,
+                None,
+                entry_point,
+                runtime,
+            )
+        } else {
+            TransactionV1Builder::new_targeting_package_via_alias(
+                target,
+                maybe_version,
+                entry_point,
+                runtime,
+            )
+        }
+    } else if looks_like_contract_hash(target) {
+        let contract_hash = parse_contract_hash(target)?;
+        TransactionV1Builder::new_targeting_invocable_entity(contract_hash, entry_point, runtime)
+    } else {
+        TransactionV1Builder::new_targeting_invocable_entity_via_alias(target, entry_point, runtime)
+    }
     .with_pricing_mode(pricing_mode)
     .with_chain_name(chain_name)
     .with_runtime_args(runtime_args)
@@ -282,7 +328,11 @@ fn transfer(
         client.put_transaction(transaction).await
     })?;
     let tx_hash_bytes = tx_hash.digest();
-    println!("Transfer submitted to {network_name}: {tx_hash_bytes:x}");
+    if args.raw {
+        println!("{tx_hash_bytes:x}");
+    } else {
+        println!("Transfer submitted to {network_name}: {tx_hash_bytes:x}");
+    }
     Ok(())
 }
 
@@ -527,15 +577,56 @@ fn parse_contract_hash(value: &str) -> Result<AddressableEntityHash> {
     Ok(AddressableEntityHash::new(hash))
 }
 
+fn parse_package_hash(value: &str) -> Result<PackageHash> {
+    const PACKAGE_HASH_LEN: usize = 32;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        bail!("package hash cannot be empty");
+    }
+    if let Ok(hash) = PackageHash::from_formatted_str(trimmed) {
+        return Ok(hash);
+    }
+    let bytes = hex::decode(trimmed).context("invalid package hash hex")?;
+    if bytes.len() != PACKAGE_HASH_LEN {
+        bail!("package hash must be 32 bytes");
+    }
+    let mut hash = [0u8; PACKAGE_HASH_LEN];
+    hash.copy_from_slice(&bytes);
+    Ok(PackageHash::new(hash))
+}
+
+fn looks_like_hex_hash(value: &str) -> bool {
+    let trimmed = value.trim();
+    let hex = trimmed.strip_prefix("0x").unwrap_or(trimmed);
+    if hex.len() != 64 {
+        return false;
+    }
+    hex.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
+fn looks_like_contract_hash(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.starts_with("contract-")
+        || trimmed.starts_with("addressable-entity-")
+        || looks_like_hex_hash(trimmed)
+}
+
+fn looks_like_package_hash(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.starts_with("package-") || looks_like_hex_hash(trimmed)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_contract_hash, parse_transaction_hash, parse_transfer_target};
+    use super::{
+        parse_contract_hash, parse_package_hash, parse_transaction_hash, parse_transfer_target,
+    };
     use casper_types::bytesrepr::ToBytes;
     use casper_types::contracts::ContractHash;
     use casper_types::crypto::AsymmetricType;
     use casper_types::{
-        AccessRights, AddressableEntityHash, DeployHash, Digest, PublicKey, TransactionHash,
-        TransactionV1Hash, TransferTarget, URef, account::AccountHash,
+        AccessRights, AddressableEntityHash, DeployHash, Digest, PackageHash, PublicKey,
+        TransactionHash, TransactionV1Hash, TransferTarget, URef, account::AccountHash,
     };
 
     fn sample_digest_hex() -> String {
@@ -604,6 +695,22 @@ mod tests {
         let hex = hex::encode(bytes);
         let parsed = parse_contract_hash(&hex).expect("hash");
         assert_eq!(parsed, AddressableEntityHash::new(bytes));
+    }
+
+    #[test]
+    fn parses_package_hash_formatted() {
+        let package_hash = PackageHash::new([4u8; 32]);
+        let formatted = package_hash.to_formatted_string();
+        let parsed = parse_package_hash(&formatted).expect("hash");
+        assert_eq!(parsed, package_hash);
+    }
+
+    #[test]
+    fn parses_raw_package_hash_hex() {
+        let bytes = [5u8; 32];
+        let hex = hex::encode(bytes);
+        let parsed = parse_package_hash(&hex).expect("hash");
+        assert_eq!(parsed, PackageHash::new(bytes));
     }
 
     #[test]

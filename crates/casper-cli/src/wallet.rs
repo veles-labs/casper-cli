@@ -112,6 +112,8 @@ pub struct DeriveArgs {
 
 #[derive(Serialize)]
 struct DeriveNameContext<'a> {
+    counter: u32,
+    counter1: u32,
     index: u32,
     index1: u32,
     wallet: &'a str,
@@ -442,6 +444,10 @@ fn wallet_derive(storage: &StorageConfig, context: &ConfigContext, args: DeriveA
             .checked_add(1)
             .ok_or_else(|| anyhow!("index1 overflows for index {index}"))?;
         let context = DeriveNameContext {
+            counter: index - args.start,
+            counter1: (index - args.start)
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("i1 overflows for i {}", index - args.start))?,
             index,
             index1,
             wallet: &args.wallet_name,
