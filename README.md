@@ -16,6 +16,20 @@ cargo build -p casper-cli
 ./target/debug/casper-cli wallet --help
 ```
 
+Deriving accounts for use with a [casper-devnet](https://github.com/veles-labs/casper-devnet) instance:
+
+```bash
+casper-cli wallet create devnet --seed default --domain casper-unsafe-devnet-v1 --unencrypted
+casper-cli wallet derive devnet --start 0 --count 4 --name 'validator-{index1}'
+casper-cli wallet derive devnet --start 100 --count 4 --name 'user-{counter1}'
+# Run the network in the background (-d switch)
+docker run -d --rm -it \
+  -p 11101:11101 -p 14101:14101 -p 18101:18101 -p 22101:22101 -p 28101:28101 \
+  ghcr.io/veles-labs/casper-devnet
+# Verify that the JSONRPC requests are working, and the derived paths are producing the same accounts.
+casper-cli view-account user-1
+```
+
 ## Development
 
 Create a release tarball for the host platform:
