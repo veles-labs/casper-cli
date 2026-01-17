@@ -6,6 +6,7 @@ mod config;
 mod contract_runtime;
 mod network;
 mod secure_storage;
+mod slip0010;
 pub mod storage;
 mod transaction;
 pub mod utils;
