@@ -38,6 +38,9 @@ casper-storage = { version = "2.1.1" }
 sled = "0.34.7"
 casper-binary-port = "1.1.1"
 veles-casper-contract-api = { version = "0.1.0", default-features = false, features = ["std"] }
+tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-native-roots"] }
+futures-util = "0.3.31"
+url = "2.5.8"
 
 [dev-dependencies]
 tempfile = "3"

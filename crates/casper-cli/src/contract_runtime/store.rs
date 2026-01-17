@@ -1,10 +1,12 @@
 use std::collections::{HashSet, VecDeque};
+use std::io;
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use futures_util::{SinkExt, StreamExt};
 use sled::{Db, Tree};
-use std::sync::Arc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -12,6 +14,8 @@ use tokio::{
     sync::Mutex,
     time::timeout,
 };
+use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use url::{Host, ParseError, Url};
 use veles_casper_contract_api::binary_port;
 use {
     casper_binary_port::{
@@ -42,13 +46,61 @@ struct StoreMetrics {
     cache_misses: AtomicU64,
 }
 
+#[derive(Clone, Debug)]
+enum BinaryPortTarget {
+    Tcp(String),
+    WebSocket(String),
+}
+
+enum BinaryPortConnection {
+    Tcp(TcpStream),
+    WebSocket(WebSocketStream<MaybeTlsStream<TcpStream>>),
+}
+
+impl BinaryPortTarget {
+    fn parse(raw: &str) -> Result<Self, binary_port::Error> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(invalid_binary_port("binary port address is empty"));
+        }
+
+        let url = match Url::parse(trimmed) {
+            Ok(url) => url,
+            Err(ParseError::RelativeUrlWithoutBase) => {
+                let tcp_url = format!("tcp://{trimmed}");
+                Url::parse(&tcp_url).map_err(|error| {
+                    invalid_binary_port(format!(
+                        "invalid binary port address '{trimmed}': {error}"
+                    ))
+                })?
+            }
+            Err(error) => {
+                return Err(invalid_binary_port(format!(
+                    "invalid binary port address '{trimmed}': {error}"
+                )));
+            }
+        };
+
+        match url.scheme() {
+            "tcp" => Ok(BinaryPortTarget::Tcp(tcp_address_from_url(&url, trimmed)?)),
+            "ws" | "wss" => {
+                validate_ws_url(&url, trimmed)?;
+                Ok(BinaryPortTarget::WebSocket(url.to_string()))
+            }
+            _ => Err(invalid_binary_port(format!(
+                "unsupported binary port scheme in '{trimmed}'"
+            ))),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct SledStore {
     binary_port: String,
     tree: Tree,
     metrics: Arc<StoreMetrics>,
     runtime: Arc<Runtime>,
-    connection: Arc<Mutex<Option<TcpStream>>>,
+    connection: Arc<Mutex<Option<BinaryPortConnection>>>,
     request_id: Arc<AtomicU16>,
 }
 
@@ -259,9 +311,10 @@ impl SledStore {
     }
 
     async fn send_raw(&self, payload: &[u8]) -> Result<Vec<u8>, binary_port::Error> {
+        let target = BinaryPortTarget::parse(&self.binary_port)?;
         let mut connection = self.connection.lock().await;
         if connection.is_none() {
-            *connection = Some(TcpStream::connect(&self.binary_port).await?);
+            *connection = Some(connect_binary_port(&target).await?);
         }
 
         match send_payload_and_read(connection.as_mut().unwrap(), payload).await {
@@ -270,7 +323,7 @@ impl SledStore {
                 *connection = None;
                 drop(connection);
                 let mut connection = self.connection.lock().await;
-                *connection = Some(TcpStream::connect(&self.binary_port).await?);
+                *connection = Some(connect_binary_port(&target).await?);
                 match send_payload_and_read(connection.as_mut().unwrap(), payload).await {
                     Ok(response) => Ok(response),
                     Err(_) => Err(error),
@@ -280,7 +333,79 @@ impl SledStore {
     }
 }
 
+async fn connect_binary_port(
+    target: &BinaryPortTarget,
+) -> Result<BinaryPortConnection, binary_port::Error> {
+    match target {
+        BinaryPortTarget::Tcp(address) => Ok(BinaryPortConnection::Tcp(
+            TcpStream::connect(address).await?,
+        )),
+        BinaryPortTarget::WebSocket(url) => {
+            let (stream, _) = connect_async(url.as_str())
+                .await
+                .map_err(websocket_error_to_io)?;
+            Ok(BinaryPortConnection::WebSocket(stream))
+        }
+    }
+}
+
 async fn send_payload_and_read(
+    connection: &mut BinaryPortConnection,
+    payload: &[u8],
+) -> Result<Vec<u8>, binary_port::Error> {
+    match connection {
+        BinaryPortConnection::Tcp(stream) => send_payload_and_read_tcp(stream, payload).await,
+        BinaryPortConnection::WebSocket(stream) => send_payload_and_read_ws(stream, payload).await,
+    }
+}
+
+fn invalid_binary_port(message: impl Into<String>) -> binary_port::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, message.into()).into()
+}
+
+fn tcp_address_from_url(url: &Url, original: &str) -> Result<String, binary_port::Error> {
+    let host = url.host().ok_or_else(|| {
+        invalid_binary_port(format!("missing host in tcp binary port '{original}'"))
+    })?;
+    let port = url.port().ok_or_else(|| {
+        invalid_binary_port(format!("missing port in tcp binary port '{original}'"))
+    })?;
+    if !(url.path().is_empty() || url.path() == "/") {
+        return Err(invalid_binary_port(format!(
+            "unexpected path in tcp binary port '{original}'"
+        )));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(invalid_binary_port(format!(
+            "unexpected query or fragment in tcp binary port '{original}'"
+        )));
+    }
+    Ok(format_host_port(host, port))
+}
+
+fn validate_ws_url(url: &Url, original: &str) -> Result<(), binary_port::Error> {
+    if url.host().is_none() {
+        return Err(invalid_binary_port(format!(
+            "missing host in websocket binary port '{original}'"
+        )));
+    }
+    if url.port().is_none() {
+        return Err(invalid_binary_port(format!(
+            "missing port in websocket binary port '{original}'"
+        )));
+    }
+    Ok(())
+}
+
+fn format_host_port(host: Host<&str>, port: u16) -> String {
+    match host {
+        Host::Domain(domain) => format!("{domain}:{port}"),
+        Host::Ipv4(addr) => format!("{addr}:{port}"),
+        Host::Ipv6(addr) => format!("[{addr}]:{port}"),
+    }
+}
+
+async fn send_payload_and_read_tcp(
     stream: &mut TcpStream,
     payload: &[u8],
 ) -> Result<Vec<u8>, binary_port::Error> {
@@ -306,6 +431,70 @@ async fn send_payload_and_read(
         .await
         .map_err(|_| binary_port::Error::Timeout)??;
     Ok(response_buf)
+}
+
+async fn send_payload_and_read_ws(
+    stream: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+    payload: &[u8],
+) -> Result<Vec<u8>, binary_port::Error> {
+    send_ws_message(stream, Message::Binary(payload.to_vec().into())).await?;
+    loop {
+        match read_ws_message(stream).await? {
+            Message::Binary(bytes) => return Ok(bytes.to_vec()),
+            Message::Ping(bytes) => {
+                send_ws_message(stream, Message::Pong(bytes)).await?;
+            }
+            Message::Pong(_) => {}
+            Message::Close(_) => {
+                return Err(binary_port::Error::Io(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "websocket closed",
+                )));
+            }
+            other => {
+                return Err(binary_port::Error::Io(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("unexpected websocket message: {other:?}"),
+                )));
+            }
+        }
+    }
+}
+
+async fn send_ws_message(
+    stream: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+    message: Message,
+) -> Result<(), binary_port::Error> {
+    timeout(REQUEST_TIMEOUT, stream.send(message))
+        .await
+        .map_err(|_| binary_port::Error::Timeout)?
+        .map_err(websocket_error_to_io)?;
+    Ok(())
+}
+
+async fn read_ws_message(
+    stream: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+) -> Result<Message, binary_port::Error> {
+    let message = timeout(REQUEST_TIMEOUT, stream.next())
+        .await
+        .map_err(|_| binary_port::Error::Timeout)?
+        .ok_or_else(|| {
+            binary_port::Error::Io(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "websocket closed",
+            ))
+        })?;
+    match message {
+        Ok(message) => Ok(message),
+        Err(error) => Err(binary_port::Error::Io(websocket_error_to_io(error))),
+    }
+}
+
+fn websocket_error_to_io(error: tokio_tungstenite::tungstenite::Error) -> io::Error {
+    match error {
+        tokio_tungstenite::tungstenite::Error::Io(error) => error,
+        other => io::Error::new(io::ErrorKind::Other, other),
+    }
 }
 
 fn map_binary_port_error(error: binary_port::Error) -> GlobalStateError {

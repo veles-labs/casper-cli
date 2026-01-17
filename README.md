@@ -176,6 +176,8 @@ chain_name = "casper-dev"
 rest = "http://127.0.0.1:14102"
 sse = "http://127.0.0.1:18102/events"
 rpc = "http://127.0.0.1:11102/rpc"
+# binary_port supports address:port, tcp://address:port, ws://address:port/path, or wss://address:port/path.
+# wss uses system trust roots and will fail on invalid certificates.
 binary_port = "127.0.0.1:28101"
 ```
 
@@ -228,7 +230,7 @@ casper-cli config edit
 
 ## Transaction commands
 
-Simulation uses the network binary port; set `binary` (ip:port) in `config.toml` before using `--simulate`.
+Simulation uses the network binary port; set `binary_port` (`address:port`, `tcp://address:port`, or `ws://address:port/path`) in `config.toml` before using `--simulate`.
 The simulator runs a local execution engine and will download trie objects from the node via the
 binary port as needed. Unlike speculative execution, it can report return values, which can be
 useful for calls like `balance_of` on a CEP-18 token without reconstructing dictionary item keys
