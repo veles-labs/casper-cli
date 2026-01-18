@@ -389,11 +389,6 @@ fn validate_ws_url(url: &Url, original: &str) -> Result<(), binary_port::Error> 
             "missing host in websocket binary port '{original}'"
         )));
     }
-    if url.port().is_none() {
-        return Err(invalid_binary_port(format!(
-            "missing port in websocket binary port '{original}'"
-        )));
-    }
     Ok(())
 }
 
@@ -500,6 +495,9 @@ fn websocket_error_to_io(error: tokio_tungstenite::tungstenite::Error) -> io::Er
 fn map_binary_port_error(error: binary_port::Error) -> GlobalStateError {
     match error {
         binary_port::Error::Bytesrepr(error) => GlobalStateError::BytesRepr(error),
-        _ => GlobalStateError::Poison,
+        error => {
+            eprintln!("Binary port error: {error}");
+            GlobalStateError::Poison
+        }
     }
 }
