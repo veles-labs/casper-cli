@@ -64,6 +64,8 @@ enum Command {
 }
 
 fn main() -> Result<()> {
+    // Ensure rustls has a process-level provider before any TLS is used.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let cli = Cli::parse();
     let config_path = match cli.config_path.clone() {
         Some(path) => path,
