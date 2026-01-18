@@ -218,7 +218,11 @@ fn decrypt_secret(
                 aad: wallet_name.as_bytes(),
             },
         )
-        .map_err(|err| StorageError::new(err.to_string()))?;
+        .map_err(|_| {
+            StorageError::new(
+                "failed to decrypt wallet secret; check the master password and wallet name",
+            )
+        })?;
 
     let secret = serde_json::from_slice(&plaintext)?;
     Ok(secret)
