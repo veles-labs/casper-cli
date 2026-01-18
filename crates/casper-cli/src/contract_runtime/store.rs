@@ -1,7 +1,7 @@
 use std::collections::{HashSet, VecDeque};
 use std::io;
-use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -14,7 +14,7 @@ use tokio::{
     sync::Mutex,
     time::timeout,
 };
-use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 use url::{Host, ParseError, Url};
 use veles_casper_contract_api::binary_port;
 use {
@@ -54,7 +54,7 @@ enum BinaryPortTarget {
 
 enum BinaryPortConnection {
     Tcp(TcpStream),
-    WebSocket(WebSocketStream<MaybeTlsStream<TcpStream>>),
+    WebSocket(Box<WebSocketStream<MaybeTlsStream<TcpStream>>>),
 }
 
 impl BinaryPortTarget {
@@ -69,9 +69,7 @@ impl BinaryPortTarget {
             Err(ParseError::RelativeUrlWithoutBase) => {
                 let tcp_url = format!("tcp://{trimmed}");
                 Url::parse(&tcp_url).map_err(|error| {
-                    invalid_binary_port(format!(
-                        "invalid binary port address '{trimmed}': {error}"
-                    ))
+                    invalid_binary_port(format!("invalid binary port address '{trimmed}': {error}"))
                 })?
             }
             Err(error) => {
@@ -344,7 +342,7 @@ async fn connect_binary_port(
             let (stream, _) = connect_async(url.as_str())
                 .await
                 .map_err(websocket_error_to_io)?;
-            Ok(BinaryPortConnection::WebSocket(stream))
+            Ok(BinaryPortConnection::WebSocket(Box::new(stream)))
         }
     }
 }
@@ -355,7 +353,9 @@ async fn send_payload_and_read(
 ) -> Result<Vec<u8>, binary_port::Error> {
     match connection {
         BinaryPortConnection::Tcp(stream) => send_payload_and_read_tcp(stream, payload).await,
-        BinaryPortConnection::WebSocket(stream) => send_payload_and_read_ws(stream, payload).await,
+        BinaryPortConnection::WebSocket(stream) => {
+            send_payload_and_read_ws(stream.as_mut(), payload).await
+        }
     }
 }
 
@@ -488,7 +488,7 @@ async fn read_ws_message(
 fn websocket_error_to_io(error: tokio_tungstenite::tungstenite::Error) -> io::Error {
     match error {
         tokio_tungstenite::tungstenite::Error::Io(error) => error,
-        other => io::Error::new(io::ErrorKind::Other, other),
+        other => io::Error::other(other),
     }
 }
 
