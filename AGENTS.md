@@ -10,5 +10,6 @@
 - Before finishing a task, run `cargo clippy --all --all-targets --all-features --tests` and report failures.
 - Keep `README.md` in sync with user-facing command changes and behaviors.
 - Update `CHANGELOG.md` for user-facing changes; list them under `[Unreleased]` in the appropriate section.
+- Changelog maintenance: follow Keep a Changelog + SemVer; keep the standard section headings; when cutting a release, move entries from `[Unreleased]` into a new tagged section with the release date based on the latest git tag; update compare links for `[Unreleased]` and the new version.
 - Avoid backward-compatibility defaults or legacy migrations unless explicitly requested.
 - Nest subcommands as module subdirectories to mirror CLI hierarchy (e.g., `account/view.rs`, `transaction/put.rs`).

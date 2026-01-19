@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+### Changed
+### Deprecated
+### Removed
+### Fixed
+### Security
+
+## [0.3.0] - 2026-01-19
+### Added
 - Added balance display for wallets.
 - Added support for importing legacy PEM secret keys as wallets.
 - Added SLIP-0010 ed25519 wallet derivation via `--slip10`.
@@ -26,5 +34,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial release.
 
-[Unreleased]: https://github.com/veles-labs/casper-cli/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/veles-labs/casper-cli/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/veles-labs/casper-cli/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/veles-labs/casper-cli/releases/tag/v0.2.1
