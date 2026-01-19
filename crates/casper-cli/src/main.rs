@@ -1,5 +1,5 @@
 mod arguments;
-mod balance;
+mod account;
 mod cl_type;
 mod cl_value;
 mod config;
@@ -10,7 +10,6 @@ mod slip0010;
 pub mod storage;
 mod transaction;
 pub mod utils;
-mod view_account;
 mod wallet;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -54,14 +53,11 @@ enum Command {
     Network(network::NetworkArgs),
     /// Config management commands.
     Config(config::ConfigArgs),
-    /// Fetch the balance for a wallet account or public key.
-    Balance(balance::BalanceArgs),
     /// Build and submit transactions.
     #[command(name = "transaction", alias = "tx")]
     Transaction(transaction::TxArgs),
-    /// View account details from the network.
-    #[command(name = "view-account")]
-    ViewAccount(view_account::ViewAccountArgs),
+    /// Account inspection commands.
+    Account(account::AccountArgs),
 }
 
 fn main() -> Result<()> {
@@ -90,8 +86,7 @@ fn main() -> Result<()> {
         Command::Wallet(command) => wallet::handle(&storage, &config_context, command),
         Command::Network(command) => network::handle(&config_context, command),
         Command::Config(command) => config::handle(&config_context, command),
-        Command::Balance(command) => balance::handle(&storage, &config_context, command),
         Command::Transaction(command) => transaction::handle(&storage, &config_context, command),
-        Command::ViewAccount(command) => view_account::handle(&storage, &config_context, command),
+        Command::Account(command) => account::handle(&storage, &config_context, command),
     }
 }

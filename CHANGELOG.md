@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `--words 12|15|18|21|24` for BIP-39 mnemonic generation.
 ### Changed
 - `wallet derive --show-private` now outputs hex-encoded Casper secret key bytes with tag prefix.
+- Renamed `view-account` to `account view`.
+- Moved `balance` to `account balance`.
+- Wallet account listings now display account hashes instead of public key hex.
+- `account view` now shows the public key and key type when available.
 ### Deprecated
 ### Removed
 ### Fixed

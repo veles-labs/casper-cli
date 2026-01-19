@@ -11,3 +11,4 @@
 - Keep `README.md` in sync with user-facing command changes and behaviors.
 - Update `CHANGELOG.md` for user-facing changes; list them under `[Unreleased]` in the appropriate section.
 - Avoid backward-compatibility defaults or legacy migrations unless explicitly requested.
+- Nest subcommands as module subdirectories to mirror CLI hierarchy (e.g., `account/view.rs`, `transaction/put.rs`).

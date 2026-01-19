@@ -1,6 +1,5 @@
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Subcommand};
-use comfy_table::{Cell, Table};
 use dialoguer::{Input, Select, theme::ColorfulTheme};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -9,6 +8,9 @@ use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 
 const CONFIG_FILE_NAME: &str = "config.toml";
+
+mod list;
+mod use_cmd;
 
 #[derive(Args)]
 /// Network-related CLI entry point.
@@ -21,16 +23,9 @@ pub struct NetworkArgs {
 /// Network subcommands.
 pub enum NetworkCommand {
     /// Select the active network.
-    Use(NetworkUseArgs),
+    Use(use_cmd::UseArgs),
     /// List configured networks and the active one.
     List,
-}
-
-#[derive(Args)]
-/// Arguments for selecting a network.
-pub struct NetworkUseArgs {
-    /// Name of the network (key or chain name).
-    name: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -92,66 +87,9 @@ impl ConfigContext {
 
 pub fn handle(context: &ConfigContext, args: NetworkArgs) -> Result<()> {
     match args.command {
-        NetworkCommand::Use(command) => network_use(context, command),
-        NetworkCommand::List => network_list(context),
+        NetworkCommand::Use(command) => use_cmd::handle(context, command),
+        NetworkCommand::List => list::handle(context),
     }
-}
-
-fn network_use(context: &ConfigContext, args: NetworkUseArgs) -> Result<()> {
-    let config_path = context.path();
-    let mut config = load_or_init_config_with_options(config_path, context.options())?;
-    let key = resolve_network_key(&config, &args.name)?;
-    let entry = config
-        .networks
-        .get(&key)
-        .cloned()
-        .ok_or_else(|| anyhow!("network '{key}' not found"))?;
-    config.active = Some(key.clone());
-    save_config(config_path, &config)?;
-    println!("Active network: {key}");
-    println!("Chain name: {}", entry.chain_name);
-    println!("REST: {}", entry.rest);
-    println!("SSE: {}", entry.sse);
-    println!("RPC: {}", entry.rpc);
-    println!("Binary port: {}", entry.binary_port);
-    Ok(())
-}
-
-fn network_list(context: &ConfigContext) -> Result<()> {
-    let config_path = context.path();
-    let config = load_or_init_config_with_options(config_path, context.options())?;
-
-    if config.networks.is_empty() {
-        println!("No networks configured.");
-        return Ok(());
-    }
-
-    let active = config.active.as_deref();
-    let mut table = Table::new();
-    table.set_header(vec![
-        "Name",
-        "Chain",
-        "Active",
-        "REST",
-        "SSE",
-        "RPC",
-        "Binary port",
-    ]);
-    for (name, entry) in config.networks {
-        let is_active = active == Some(name.as_str());
-        table.add_row(vec![
-            Cell::new(&name),
-            Cell::new(&entry.chain_name),
-            Cell::new(if is_active { "yes" } else { "" }),
-            Cell::new(&entry.rest),
-            Cell::new(&entry.sse),
-            Cell::new(&entry.rpc),
-            Cell::new(&entry.binary_port),
-        ]);
-    }
-
-    println!("{table}");
-    Ok(())
 }
 
 fn resolve_network_key(config: &AppConfig, name: &str) -> Result<String> {

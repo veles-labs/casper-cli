@@ -1,20 +1,20 @@
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use comfy_table::{Cell, Table};
 use tokio::runtime::Runtime;
 
-use casper_types::{PublicKey, account::AccountHash, bytesrepr::deserialize_from_slice};
-use veles_casper_rust_sdk::jsonrpc::{AccountIdentifier, CasperClient};
+use casper_types::{
+    PublicKey,
+    bytesrepr::ToBytes,
+};
+use veles_casper_rust_sdk::jsonrpc::CasperClient;
 
 use crate::network;
 use crate::storage::StorageConfig;
-use crate::wallet;
-
-const ACCOUNT_HASH_LEN: usize = 32;
 
 #[derive(Args)]
 /// Arguments for viewing account details.
-pub struct ViewAccountArgs {
+pub struct ViewArgs {
     /// Wallet/account reference (<wallet>:<account>), legacy wallet name, account hash hex, or public key hex.
     name: String,
 }
@@ -22,10 +22,11 @@ pub struct ViewAccountArgs {
 pub fn handle(
     storage: &StorageConfig,
     context: &network::ConfigContext,
-    args: ViewAccountArgs,
+    args: ViewArgs,
 ) -> Result<()> {
     let name = args.name;
-    let account_identifier = resolve_account_identifier(storage, &name)?;
+    let resolved = super::identifier::resolve(storage, &name)?;
+    let account_identifier = resolved.identifier();
     let (network_name, rpc_endpoint) = network::active_network_rpc(context)?;
 
     let runtime = Runtime::new().context("failed to start async runtime")?;
@@ -39,6 +40,16 @@ pub fn handle(
             let account = account_result.account;
             println!("Account details on network {network_name}:");
             println!("Account hash: {}", account.account_hash());
+            match resolved.public_key() {
+                Some(public_key) => {
+                    let key_kind = public_key_kind_label(public_key);
+                    let key_hex = public_key_hex(public_key)?;
+                    println!("Public key ({key_kind}): {key_hex}");
+                }
+                None => {
+                    println!("Public key: (unavailable; account hash input)");
+                }
+            }
             println!("Main purse: {}", account.main_purse().to_formatted_string());
             let mut assoc_table = Table::new();
             assoc_table.set_header(vec!["Associated Key", "Weight"]);
@@ -68,29 +79,18 @@ pub fn handle(
     Ok(())
 }
 
-fn resolve_account_identifier(storage: &StorageConfig, input: &str) -> Result<AccountIdentifier> {
-    if let Some((wallet_name, account_name)) = input.split_once(':') {
-        if wallet_name.is_empty() || account_name.is_empty() {
-            bail!("wallet/account reference must be <wallet>:<account>");
-        }
-        let public_key_hex =
-            wallet::resolve_account_public_key(storage, wallet_name, account_name)?;
-        return parse_account_identifier(&public_key_hex);
+fn public_key_kind_label(public_key: &PublicKey) -> &'static str {
+    match public_key {
+        PublicKey::Ed25519(_) => "ed25519",
+        PublicKey::Secp256k1(_) => "secp256k1",
+        PublicKey::System => "system",
+        _ => "unknown",
     }
-    if let Some(public_key_hex) = wallet::try_resolve_legacy_public_key(storage, input)? {
-        return parse_account_identifier(&public_key_hex);
-    }
-    parse_account_identifier(input)
 }
 
-fn parse_account_identifier(input: &str) -> Result<AccountIdentifier> {
-    let bytes = hex::decode(input).context("invalid public key hex")?;
-    if bytes.len() == ACCOUNT_HASH_LEN {
-        let mut hash = [0u8; ACCOUNT_HASH_LEN];
-        hash.copy_from_slice(&bytes);
-        return Ok(AccountIdentifier::AccountHash(AccountHash::new(hash)));
-    }
-    let public_key: PublicKey =
-        deserialize_from_slice(&bytes).map_err(|_| anyhow!("invalid public key bytes"))?;
-    Ok(AccountIdentifier::PublicKey(public_key))
+fn public_key_hex(public_key: &PublicKey) -> Result<String> {
+    let public_key_bytes = public_key
+        .to_bytes()
+        .map_err(|err| anyhow!(err.to_string()))?;
+    Ok(hex::encode(public_key_bytes))
 }

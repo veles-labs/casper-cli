@@ -1,28 +1,30 @@
 use anyhow::{Context, Result, anyhow, bail};
 use casper_execution_engine::engine_state::{EngineConfig, ExecutionEngineV1};
 use casper_types::account::AccountHash;
-use casper_types::bytesrepr::{Bytes, deserialize_from_slice};
+use casper_types::bytesrepr::deserialize_from_slice;
 use casper_types::contracts::ContractHash;
 use casper_types::{
-    AddressableEntityHash, CLType, DeployHash, Digest, EntityVersion, PackageHash, PricingMode,
-    PublicKey, RuntimeArgs, SecretKey, Transaction, TransactionHash, TransactionRuntimeParams,
-    TransactionV1Hash, TransferTarget, URef,
+    AddressableEntityHash, CLType, DeployHash, Digest, PackageHash, PublicKey, RuntimeArgs,
+    SecretKey, Transaction, TransactionHash, TransactionV1Hash, TransferTarget, URef,
 };
 use clap::{Args, Subcommand};
 use std::fs;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
-use veles_casper_rust_sdk::TransactionV1Builder;
 use veles_casper_rust_sdk::jsonrpc::CasperClient;
 
 use crate::arguments::parse_argument;
-use crate::contract_runtime::ContractRuntime;
 use crate::contract_runtime::store::SledStore;
+use crate::contract_runtime::ContractRuntime;
 use crate::storage::StorageConfig;
 use crate::wallet;
 use crate::{cl_type, cl_value};
 use crate::{network, utils};
+
+mod call;
+mod get;
+mod put;
+mod transfer;
 
 const DEFAULT_GAS_PRICE_TOLERANCE: u8 = 1;
 
@@ -37,111 +39,13 @@ pub struct TxArgs {
 /// Transaction subcommands.
 pub enum TxCommand {
     /// Build a session transaction from Wasm.
-    Put(PutArgs),
+    Put(put::PutArgs),
     /// Call a stored contract by hash.
-    Call(CallArgs),
+    Call(call::CallArgs),
     /// Fetch transaction execution details by hash.
-    Get(GetArgs),
+    Get(get::GetArgs),
     /// Transfer tokens to another account.
-    Transfer(TransferArgs),
-}
-
-#[derive(Args)]
-/// Arguments for creating a session transaction.
-pub struct PutArgs {
-    /// Path to the session Wasm.
-    wasm: PathBuf,
-    /// Payment amount in CSPR.
-    #[arg(long, default_value = "2.5")]
-    payment_amount: String,
-    /// Gas price tolerance (minimum 1).
-    #[arg(long, default_value_t = DEFAULT_GAS_PRICE_TOLERANCE)]
-    gas_price_tolerance: u8,
-    /// Wallet/account reference (<wallet>:<account>) or legacy wallet name.
-    #[arg(long)]
-    from: String,
-    /// Runtime argument in the form name:cltype=value or name=value (hex for Any).
-    #[arg(long = "arg", value_name = "NAME[:CLTYPE]=VALUE")]
-    args: Vec<String>,
-    /// Mark the session as an install/upgrade transaction.
-    #[arg(long)]
-    install_upgrade: bool,
-    /// Simulate execution using the network binary port.
-    #[arg(long)]
-    simulate: bool,
-    /// Print only the transaction hash on success.
-    #[arg(long)]
-    raw: bool,
-}
-
-#[derive(Args)]
-/// Arguments for calling a stored contract.
-pub struct CallArgs {
-    /// Contract hash (contract-/addressable-entity- prefix or raw hex), package hash with --package,
-    /// or named key alias.
-    contract_hash: String,
-    /// Contract entry point name.
-    entry_point: String,
-    /// Payment amount in CSPR.
-    #[arg(long, default_value = "2.5")]
-    payment_amount: String,
-    /// Gas price tolerance (minimum 1).
-    #[arg(long, default_value_t = DEFAULT_GAS_PRICE_TOLERANCE)]
-    gas_price_tolerance: u8,
-    /// Wallet/account reference (<wallet>:<account>) or legacy wallet name.
-    #[arg(long)]
-    from: String,
-    /// Runtime argument in the form name:cltype=value or name=value (hex for Any).
-    #[arg(long = "arg", value_name = "NAME[:CLTYPE]=VALUE")]
-    args: Vec<String>,
-    /// Interpret the contract hash as a package hash.
-    #[arg(long)]
-    package: bool,
-    /// Package version (requires --package).
-    #[arg(long, value_name = "VERSION")]
-    version: Option<EntityVersion>,
-    /// Simulate execution using the network binary port.
-    #[arg(long)]
-    simulate: bool,
-    /// Print only the transaction hash on success.
-    #[arg(long)]
-    raw: bool,
-}
-
-#[derive(Args)]
-/// Arguments for transferring CSPR.
-pub struct TransferArgs {
-    /// Wallet/account reference (<wallet>:<account>) or legacy wallet name.
-    #[arg(long)]
-    from: String,
-    /// Recipient wallet/account, legacy wallet name, public key bytes hex, or account hash bytes hex.
-    #[arg(long)]
-    to: String,
-    /// Amount in CSPR.
-    #[arg(long)]
-    amount: String,
-    /// Gas price tolerance (minimum 1).
-    #[arg(long, default_value_t = DEFAULT_GAS_PRICE_TOLERANCE)]
-    gas_price_tolerance: u8,
-    /// Simulate execution using the network binary port.
-    #[arg(long)]
-    simulate: bool,
-    /// Print only the transaction hash on success.
-    #[arg(long)]
-    raw: bool,
-}
-
-#[derive(Args)]
-/// Arguments for fetching transaction details.
-pub struct GetArgs {
-    /// Transaction hash hex (or deploy-hash-<hex>/transaction-v1-hash-<hex>).
-    transaction_hash: String,
-    /// Request finalized approvals from the node.
-    #[arg(long)]
-    finalized_approvals: bool,
-    /// Print only the execution_info JSON (or null if missing).
-    #[arg(long)]
-    raw: bool,
+    Transfer(transfer::TransferArgs),
 }
 
 pub fn handle(
@@ -150,237 +54,11 @@ pub fn handle(
     args: TxArgs,
 ) -> Result<()> {
     match args.command {
-        TxCommand::Put(command) => put_session(storage, context, command),
-        TxCommand::Call(command) => call_contract(storage, context, command),
-        TxCommand::Get(command) => get_transaction(context, command),
-        TxCommand::Transfer(command) => transfer(storage, context, command),
+        TxCommand::Put(command) => put::handle(storage, context, command),
+        TxCommand::Call(command) => call::handle(storage, context, command),
+        TxCommand::Get(command) => get::handle(context, command),
+        TxCommand::Transfer(command) => transfer::handle(storage, context, command),
     }
-}
-
-fn put_session(
-    storage: &StorageConfig,
-    context: &network::ConfigContext,
-    args: PutArgs,
-) -> Result<()> {
-    let module_bytes =
-        fs::read(&args.wasm).with_context(|| format!("failed to read {}", args.wasm.display()))?;
-    let runtime = TransactionRuntimeParams::VmCasperV1;
-    let payment_amount = utils::u512_to_u64(utils::parse_cspr_to_motes(
-        "payment amount",
-        &args.payment_amount,
-    )?)?;
-    let pricing_mode = PricingMode::PaymentLimited {
-        payment_amount,
-        gas_price_tolerance: args.gas_price_tolerance,
-        standard_payment: true,
-    };
-    let secret_key = resolve_from_secret_key(storage, &args.from)?;
-    let chain_name = network::active_network_chain_name(context)?;
-    let (network_name, rpc_endpoint) = network::active_network_rpc(context)?;
-
-    let runtime_args = parse_runtime_args(&args.args)?;
-    let builder =
-        TransactionV1Builder::new_session(args.install_upgrade, Bytes::from(module_bytes), runtime)
-            .with_pricing_mode(pricing_mode)
-            .with_chain_name(chain_name)
-            .with_runtime_args(runtime_args)
-            .with_secret_key(&secret_key);
-
-    let tx = builder.build()?;
-    let transaction = Transaction::V1(tx);
-    if args.simulate {
-        return simulate_transaction(storage, context, transaction);
-    }
-    let runtime = Runtime::new().context("failed to start async runtime")?;
-    let tx_hash = runtime.block_on(async {
-        let client = CasperClient::new(rpc_endpoint);
-        client.put_transaction(transaction).await
-    })?;
-    let tx_hash_bytes = tx_hash.digest();
-    if args.raw {
-        println!("{tx_hash_bytes:x}");
-    } else {
-        println!("Transaction submitted to {network_name}: {tx_hash_bytes:x}");
-    }
-    Ok(())
-}
-
-fn call_contract(
-    storage: &StorageConfig,
-    context: &network::ConfigContext,
-    args: CallArgs,
-) -> Result<()> {
-    if args.version.is_some() && !args.package {
-        bail!("--version requires --package");
-    }
-    let runtime = TransactionRuntimeParams::VmCasperV1;
-    let payment_amount = utils::u512_to_u64(utils::parse_cspr_to_motes(
-        "payment amount",
-        &args.payment_amount,
-    )?)?;
-    let pricing_mode = PricingMode::PaymentLimited {
-        payment_amount,
-        gas_price_tolerance: args.gas_price_tolerance,
-        standard_payment: true,
-    };
-    let secret_key = resolve_from_secret_key(storage, &args.from)?;
-    let chain_name = network::active_network_chain_name(context)?;
-    let (network_name, rpc_endpoint) = network::active_network_rpc(context)?;
-
-    let runtime_args = parse_runtime_args(&args.args)?;
-    let entry_point = args.entry_point.as_str();
-    let maybe_version = args.version;
-    let target = args.contract_hash.trim();
-    if target.is_empty() {
-        if args.package {
-            bail!("package hash cannot be empty");
-        }
-        bail!("contract hash cannot be empty");
-    }
-    let builder = if args.package {
-        if looks_like_package_hash(target) {
-            let package_hash = parse_package_hash(target)?;
-            TransactionV1Builder::new_targeting_package(
-                package_hash,
-                maybe_version,
-                entry_point,
-                runtime,
-            )
-        } else if maybe_version.is_some() {
-            TransactionV1Builder::new_targeting_package_via_alias_with_version_key(
-                target,
-                maybe_version,
-                None,
-                entry_point,
-                runtime,
-            )
-        } else {
-            TransactionV1Builder::new_targeting_package_via_alias(
-                target,
-                maybe_version,
-                entry_point,
-                runtime,
-            )
-        }
-    } else if looks_like_contract_hash(target) {
-        let contract_hash = parse_contract_hash(target)?;
-        TransactionV1Builder::new_targeting_invocable_entity(contract_hash, entry_point, runtime)
-    } else {
-        TransactionV1Builder::new_targeting_invocable_entity_via_alias(target, entry_point, runtime)
-    }
-    .with_pricing_mode(pricing_mode)
-    .with_chain_name(chain_name)
-    .with_runtime_args(runtime_args)
-    .with_secret_key(&secret_key);
-
-    let tx = builder.build()?;
-    let transaction = Transaction::V1(tx);
-    if args.simulate {
-        return simulate_transaction(storage, context, transaction);
-    }
-    let runtime = Runtime::new().context("failed to start async runtime")?;
-    let tx_hash = runtime.block_on(async {
-        let client = CasperClient::new(rpc_endpoint);
-        client.put_transaction(transaction).await
-    })?;
-    let tx_hash_bytes = tx_hash.digest();
-    if args.raw {
-        println!("{tx_hash_bytes:x}");
-    } else {
-        println!("Contract call submitted to {network_name}: {tx_hash_bytes:x}");
-    }
-    Ok(())
-}
-
-fn transfer(
-    storage: &StorageConfig,
-    context: &network::ConfigContext,
-    args: TransferArgs,
-) -> Result<()> {
-    let amount = utils::parse_cspr_to_motes("transfer amount", &args.amount)?;
-    let target = resolve_transfer_target(storage, &args.to)?;
-    let secret_key = resolve_from_secret_key(storage, &args.from)?;
-    let chain_name = network::active_network_chain_name(context)?;
-    let (network_name, rpc_endpoint) = network::active_network_rpc(context)?;
-
-    let pricing_mode = PricingMode::PaymentLimited {
-        payment_amount: 2_500_000_000u64, // This is a standard payment of 2.5 CSPR which is ignored by the host anyway.
-        gas_price_tolerance: args.gas_price_tolerance,
-        standard_payment: true,
-    };
-    let builder = TransactionV1Builder::new_transfer(amount, None, target, None)
-        .map_err(|err| anyhow!(err.to_string()))?
-        .with_pricing_mode(pricing_mode)
-        .with_chain_name(chain_name)
-        .with_secret_key(&secret_key);
-
-    let tx = builder.build()?;
-    let transaction = Transaction::V1(tx);
-    if args.simulate {
-        return simulate_transaction(storage, context, transaction);
-    }
-    let runtime = Runtime::new().context("failed to start async runtime")?;
-    let tx_hash = runtime.block_on(async {
-        let client = CasperClient::new(rpc_endpoint);
-        client.put_transaction(transaction).await
-    })?;
-    let tx_hash_bytes = tx_hash.digest();
-    if args.raw {
-        println!("{tx_hash_bytes:x}");
-    } else {
-        println!("Transfer submitted to {network_name}: {tx_hash_bytes:x}");
-    }
-    Ok(())
-}
-
-fn get_transaction(context: &network::ConfigContext, args: GetArgs) -> Result<()> {
-    let transaction_hash = parse_transaction_hash(&args.transaction_hash)?;
-    let (network_name, rpc_endpoint) = network::active_network_rpc(context)?;
-
-    let runtime = Runtime::new().context("failed to start async runtime")?;
-    let result = runtime.block_on(async {
-        let client = CasperClient::new(rpc_endpoint);
-        client
-            .get_transaction(transaction_hash, args.finalized_approvals)
-            .await
-    })?;
-
-    if args.raw {
-        if let Some(execution_info) = result.execution_info {
-            let json = serde_json::to_string_pretty(&execution_info)
-                .context("format execution_info as json")?;
-            println!("{json}");
-        } else {
-            println!("null");
-        }
-        return Ok(());
-    }
-
-    println!("Network: {network_name}");
-    match result.execution_info {
-        Some(execution_info) => {
-            println!("Block hash: {:x}", execution_info.block_hash.inner());
-            println!("Block height: {}", execution_info.block_height);
-            if let Some(execution_result) = execution_info.execution_result {
-                let consumed = execution_result.consumed();
-                let consumed_cspr = utils::format_cspr(&consumed);
-                println!("Gas consumed: {consumed_cspr} CSPR");
-                if let Some(error) = execution_result.error_message() {
-                    println!("Execution error: {error}");
-                    bail!("transaction execution failed");
-                } else {
-                    println!("Execution status: success");
-                }
-            } else {
-                println!("Execution result: <missing>");
-            }
-        }
-        None => {
-            println!("Execution info: <missing>");
-        }
-    }
-
-    Ok(())
 }
 
 fn resolve_from_secret_key(storage: &StorageConfig, value: &str) -> Result<SecretKey> {

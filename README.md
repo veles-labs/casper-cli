@@ -27,7 +27,7 @@ docker run -d --rm -it \
   -p 11101:11101 -p 14101:14101 -p 18101:18101 -p 22101:22101 -p 28101:28101 \
   ghcr.io/veles-labs/casper-devnet
 # Verify that the JSONRPC requests are working, and the derived paths are producing the same accounts.
-casper-cli view-account user-1
+casper-cli account view user-1
 ```
 
 ## Development
@@ -142,7 +142,7 @@ casper-cli wallet list
 
 ### wallet info
 
-Shows wallet type, encryption state, known accounts, and their balances on the active network (missing accounts show `0 CSPR`). Legacy wallets show their origin, key type, and public key.
+Shows wallet type, encryption state, known accounts, and their balances on the active network (missing accounts show `0 CSPR`). Legacy wallets show their origin, key type, and account hash.
 
 ```bash
 casper-cli wallet info mywallet
@@ -240,26 +240,26 @@ Lists configured networks and highlights which one is active:
 casper-cli network list
 ```
 
-## Balance command
+## Account balance command
 
 Fetches the balance for a wallet account, legacy wallet name, account hash hex, or a raw public key hex. The active network is read from `config.toml`.
 
 ```bash
-casper-cli balance mywallet:account-0
-casper-cli balance legacywallet
-casper-cli balance 0202c1...deadbeef
-casper-cli balance <account-hash-hex>
+casper-cli account balance mywallet:account-0
+casper-cli account balance legacywallet
+casper-cli account balance 0202c1...deadbeef
+casper-cli account balance <account-hash-hex>
 ```
 
-## View account command
+## Account view command
 
 Fetches account details from the active network and prints named keys for a wallet account, legacy wallet name, or raw identifier.
 
 ```bash
-casper-cli view-account mywallet:account-0
-casper-cli view-account legacywallet
-casper-cli view-account <public-key-hex>
-casper-cli view-account <account-hash-hex>
+casper-cli account view mywallet:account-0
+casper-cli account view legacywallet
+casper-cli account view <public-key-hex>
+casper-cli account view <account-hash-hex>
 ```
 
 ## Config commands

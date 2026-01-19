@@ -1,6 +1,6 @@
-use crate::network::{self, ConfigContext};
+use crate::network::ConfigContext;
 use crate::secure_storage::keyring;
-use crate::secure_storage::{RootSecret, SecureStorage, StorageBackendKind, StoreMode};
+use crate::secure_storage::{RootSecret, SecureStorage, StorageBackendKind};
 use crate::slip0010;
 use crate::storage::StorageConfig;
 use anyhow::{Context, Result, anyhow, bail};
@@ -9,25 +9,27 @@ use bip39::{Language, Mnemonic};
 use blake2::Blake2bVar;
 use blake2::digest::{Update, VariableOutput};
 use casper_types::{
-    ED25519_TAG, PublicKey, SECP256K1_TAG, SecretKey, U512,
+    PublicKey, SecretKey,
     bytesrepr::{ToBytes, deserialize_from_slice},
 };
 use clap::{Args, Subcommand};
-use comfy_table::{Cell, Table};
-use indicatif::{ProgressBar, ProgressStyle};
-use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use tinytemplate::TinyTemplate;
-use tokio::runtime::Runtime;
-use veles_casper_rust_sdk::jsonrpc::{AccountIdentifier, CasperClient};
 use zeroize::Zeroize;
 
 const WALLET_DIR_NAME: &str = "wallets";
-const DEFAULT_BIP32_SECP256K1_PATH_PREFIX: &str = "m/44'/506'/0'/0";
+
+mod create;
+mod recover;
+mod import_legacy;
+mod list;
+mod info;
+mod derive;
+mod rename;
+mod delete;
+mod external;
 
 fn parse_word_count(value: &str) -> std::result::Result<u16, String> {
     match value {
@@ -51,138 +53,27 @@ pub struct WalletArgs {
 /// Wallet subcommands.
 pub enum WalletCommand {
     /// Create a new wallet.
-    Create(CreateArgs),
+    Create(create::CreateArgs),
     /// Recover a wallet from a mnemonic.
-    Recover(RecoverArgs),
+    Recover(recover::RecoverArgs),
     /// Import a legacy secret key PEM as a wallet.
     #[command(name = "import-legacy")]
-    ImportLegacy(ImportLegacyArgs),
+    ImportLegacy(import_legacy::ImportLegacyArgs),
     /// List wallets in the configured storage directory.
     List,
     /// Show wallet metadata and known accounts.
-    Info(InfoArgs),
+    Info(info::InfoArgs),
     /// Derive one or more accounts from the wallet root.
-    Derive(DeriveArgs),
+    Derive(derive::DeriveArgs),
     /// Rename an account inside a wallet.
     #[command(name = "rename-account")]
-    RenameAccount(RenameArgs),
+    RenameAccount(rename::RenameArgs),
     /// Delete a wallet's metadata and secret.
-    Delete(DeleteArgs),
+    Delete(delete::DeleteArgs),
     #[command(external_subcommand)]
     External(Vec<String>),
 }
 
-#[derive(Args)]
-/// Arguments for creating a wallet.
-pub struct CreateArgs {
-    /// Name for the wallet.
-    name: String,
-    /// Use BIP-39 (default).
-    #[arg(long)]
-    bip39: bool,
-    /// Use BIP-32 secp256k1 derivation (default).
-    #[arg(long, conflicts_with = "slip10")]
-    bip32: bool,
-    /// Use SLIP-0010 ed25519 derivation.
-    #[arg(long, conflicts_with = "bip32")]
-    slip10: bool,
-    /// BIP-39 word count (12, 15, 18, 21, or 24). Defaults to 24.
-    #[arg(long, value_parser = parse_word_count)]
-    words: Option<u16>,
-    /// Deterministic seed input (requires --domain).
-    #[arg(long)]
-    seed: Option<String>,
-    /// Deterministic derivation domain (requires --seed).
-    #[arg(long)]
-    domain: Option<String>,
-    /// Store wallet secrets unencrypted (unsafe).
-    #[arg(long)]
-    unencrypted: bool,
-}
-
-#[derive(Args)]
-/// Arguments for recovering a wallet from a mnemonic.
-pub struct RecoverArgs {
-    /// Name for the wallet.
-    name: String,
-    /// Use BIP-32 secp256k1 derivation (default).
-    #[arg(long, conflicts_with = "slip10")]
-    bip32: bool,
-    /// Use SLIP-0010 ed25519 derivation.
-    #[arg(long, conflicts_with = "bip32")]
-    slip10: bool,
-    /// Store wallet secrets unencrypted (unsafe).
-    #[arg(long)]
-    unencrypted: bool,
-}
-
-#[derive(Args)]
-/// Arguments for importing a legacy secret key PEM.
-pub struct ImportLegacyArgs {
-    /// Name for the wallet.
-    name: String,
-    /// Path to the legacy secret key PEM (defaults to stdin).
-    #[arg(long, value_name = "PATH")]
-    pem_file: Option<PathBuf>,
-    /// Store wallet secrets unencrypted (unsafe).
-    #[arg(long)]
-    unencrypted: bool,
-}
-
-#[derive(Args)]
-/// Arguments for showing wallet info.
-pub struct InfoArgs {
-    /// Name of the wallet.
-    name: String,
-}
-
-#[derive(Args)]
-/// Arguments for deleting a wallet.
-pub struct DeleteArgs {
-    /// Name of the wallet.
-    name: String,
-}
-
-#[derive(Args)]
-/// Arguments for deriving accounts.
-pub struct DeriveArgs {
-    /// Name of the wallet.
-    wallet_name: String,
-    /// Account name template for derived accounts.
-    #[arg(long, default_value = "account-{index}", value_name = "TEMPLATE")]
-    name: String,
-    /// Number of accounts to derive.
-    #[arg(long, default_value_t = 1)]
-    count: u32,
-    /// Starting index for derivation.
-    #[arg(long, default_value_t = 0)]
-    start: u32,
-    /// Print private keys (dangerous).
-    #[arg(long, alias = "private")]
-    show_private: bool,
-}
-
-#[derive(Serialize)]
-struct DeriveNameContext<'a> {
-    counter: u32,
-    counter1: u32,
-    index: u32,
-    index1: u32,
-    wallet: &'a str,
-    network: &'a str,
-    chain_name: &'a str,
-}
-
-#[derive(Args)]
-/// Arguments for renaming an account.
-pub struct RenameArgs {
-    /// Name of the wallet.
-    wallet_name: String,
-    /// Existing account name.
-    old_name: String,
-    /// New account name.
-    new_name: String,
-}
 
 #[derive(Serialize, Deserialize)]
 struct WalletMetadata {
@@ -223,15 +114,15 @@ struct DerivedAccount {
 
 pub fn handle(storage: &StorageConfig, context: &ConfigContext, args: WalletArgs) -> Result<()> {
     match args.command {
-        WalletCommand::Create(command) => create_wallet(storage, command),
-        WalletCommand::Recover(command) => recover_wallet(storage, command),
-        WalletCommand::ImportLegacy(command) => import_legacy_wallet(storage, command),
-        WalletCommand::List => wallet_list(storage),
-        WalletCommand::Info(command) => wallet_info(storage, context, command),
-        WalletCommand::Derive(command) => wallet_derive(storage, context, command),
-        WalletCommand::RenameAccount(command) => wallet_rename(storage, command),
-        WalletCommand::Delete(command) => wallet_delete(storage, command),
-        WalletCommand::External(command) => wallet_external(storage, command),
+        WalletCommand::Create(command) => create::handle(storage, command),
+        WalletCommand::Recover(command) => recover::handle(storage, command),
+        WalletCommand::ImportLegacy(command) => import_legacy::handle(storage, command),
+        WalletCommand::List => list::handle(storage),
+        WalletCommand::Info(command) => info::handle(storage, context, command),
+        WalletCommand::Derive(command) => derive::handle(storage, context, command),
+        WalletCommand::RenameAccount(command) => rename::handle(storage, command),
+        WalletCommand::Delete(command) => delete::handle(storage, command),
+        WalletCommand::External(command) => external::handle(storage, command),
     }
 }
 
@@ -388,580 +279,12 @@ fn secret_key_from_pem(pem: &str) -> Result<SecretKey> {
     Ok(secret_key)
 }
 
-fn create_wallet(storage: &StorageConfig, args: CreateArgs) -> Result<()> {
-    let wallet_storage = wallet_storage(storage, &args.name)?;
-    ensure_unencrypted_allowed(wallet_storage.storage.as_ref(), args.unencrypted)?;
-    ensure_wallet_absent(&wallet_storage, &args.name)?;
-    let uses_master_password = wallet_storage.storage.uses_master_password();
-    let store_mode = if args.unencrypted {
-        StoreMode::Unencrypted
-    } else {
-        StoreMode::Encrypted
-    };
-
-    let using_seed = args.seed.is_some() || args.domain.is_some();
-    if args.bip39 && using_seed {
-        bail!("--bip39 is mutually exclusive with --seed/--domain");
-    }
-    if using_seed && args.words.is_some() {
-        bail!("--words is only valid with BIP-39 mnemonics");
-    }
-    let derivation = derivation_from_flags(args.bip32, args.slip10)?;
-
-    let root_secret = if using_seed {
-        let seed = args.seed.context("--seed is required with --domain")?;
-        let domain = args.domain.context("--domain is required with --seed")?;
-        warn_seeded_wallet(&domain);
-        RootSecret::Seeded { seed, domain }
-    } else {
-        let word_count = args.words.unwrap_or(24) as usize;
-        let mnemonic = Mnemonic::generate_in_with(&mut OsRng, Language::English, word_count)
-            .map_err(|err| anyhow!("failed to generate mnemonic: {err}"))?;
-        let passphrase = prompt_passphrase("Enter optional BIP-39 passphrase: ")?;
-
-        if passphrase.is_empty() {
-            println!("Passphrase: (none)");
-        } else {
-            println!("Passphrase: (set; stored in secure storage)");
-        }
-
-        println!("Mnemonic: {}", mnemonic);
-        RootSecret::Bip39 {
-            mnemonic: mnemonic.to_string(),
-            passphrase,
-        }
-    };
-
-    let (wallet_type, domain) = wallet_type_from_secret(&root_secret)?;
-    let encrypted = if uses_master_password {
-        !args.unencrypted
-    } else {
-        true
-    };
-    let metadata = WalletMetadata {
-        version: 1,
-        name: args.name.clone(),
-        storage: wallet_storage.storage.backend_kind(),
-        encrypted,
-        wallet_type,
-        derivation,
-        domain,
-        accounts: Vec::new(),
-    };
-    wallet_storage
-        .storage
-        .store(&args.name, &root_secret, store_mode)
-        .map_err(|err| anyhow!(err.to_string()))?;
-    save_metadata(&wallet_storage.metadata_path, &metadata)?;
-    println!("Wallet saved to {}", wallet_storage.metadata_path.display());
-    Ok(())
-}
-
-fn recover_wallet(storage: &StorageConfig, args: RecoverArgs) -> Result<()> {
-    let wallet_storage = wallet_storage(storage, &args.name)?;
-    ensure_unencrypted_allowed(wallet_storage.storage.as_ref(), args.unencrypted)?;
-    ensure_wallet_absent(&wallet_storage, &args.name)?;
-
-    let mnemonic_input = prompt_mnemonic()?;
-    let mnemonic = Mnemonic::parse_in(Language::English, mnemonic_input)
-        .map_err(|err| anyhow!("invalid mnemonic: {err}"))?;
-    let passphrase = prompt_passphrase("Enter optional BIP-39 passphrase: ")?;
-
-    let uses_master_password = wallet_storage.storage.uses_master_password();
-    let store_mode = if args.unencrypted {
-        StoreMode::Unencrypted
-    } else {
-        StoreMode::Encrypted
-    };
-    let derivation = derivation_from_flags(args.bip32, args.slip10)?;
-
-    let root_secret = RootSecret::Bip39 {
-        mnemonic: mnemonic.to_string(),
-        passphrase,
-    };
-
-    let (wallet_type, domain) = wallet_type_from_secret(&root_secret)?;
-    let encrypted = if uses_master_password {
-        !args.unencrypted
-    } else {
-        true
-    };
-    let metadata = WalletMetadata {
-        version: 1,
-        name: args.name.clone(),
-        storage: wallet_storage.storage.backend_kind(),
-        encrypted,
-        wallet_type,
-        derivation,
-        domain,
-        accounts: Vec::new(),
-    };
-
-    wallet_storage
-        .storage
-        .store(&args.name, &root_secret, store_mode)
-        .map_err(|err| anyhow!(err.to_string()))?;
-    save_metadata(&wallet_storage.metadata_path, &metadata)?;
-    println!("Wallet saved to {}", wallet_storage.metadata_path.display());
-    Ok(())
-}
-
-fn import_legacy_wallet(storage: &StorageConfig, args: ImportLegacyArgs) -> Result<()> {
-    let wallet_storage = wallet_storage(storage, &args.name)?;
-    ensure_unencrypted_allowed(wallet_storage.storage.as_ref(), args.unencrypted)?;
-    ensure_wallet_absent(&wallet_storage, &args.name)?;
-
-    let pem = read_legacy_pem(args.pem_file.as_ref())?;
-
-    let uses_master_password = wallet_storage.storage.uses_master_password();
-    let store_mode = if args.unencrypted {
-        StoreMode::Unencrypted
-    } else {
-        StoreMode::Encrypted
-    };
-    let root_secret = RootSecret::LegacyPem { pem };
-    let (wallet_type, domain) = wallet_type_from_secret(&root_secret)?;
-    let encrypted = if uses_master_password {
-        !args.unencrypted
-    } else {
-        true
-    };
-    let derivation = DerivationScheme::Bip32Secp256k1;
-    let metadata = WalletMetadata {
-        version: 1,
-        name: args.name.clone(),
-        storage: wallet_storage.storage.backend_kind(),
-        encrypted,
-        wallet_type,
-        derivation,
-        domain,
-        accounts: Vec::new(),
-    };
-
-    wallet_storage
-        .storage
-        .store(&args.name, &root_secret, store_mode)
-        .map_err(|err| anyhow!(err.to_string()))?;
-    save_metadata(&wallet_storage.metadata_path, &metadata)?;
-    println!("Wallet saved to {}", wallet_storage.metadata_path.display());
-    Ok(())
-}
-
-fn wallet_list(storage: &StorageConfig) -> Result<()> {
-    let metadata_dir = wallets_dir(storage)?;
-    let secret_storage = storage.secret_storage()?;
-    let mut names = secret_storage
-        .list()
-        .map_err(|err| anyhow!(err.to_string()))?;
-
-    if names.is_empty() {
-        println!("No wallets found.");
-        return Ok(());
-    }
-
-    names.sort();
-
-    let mut table = Table::new();
-    table.set_header(vec!["Name", "Encrypted", "Accounts"]);
-    for name in names {
-        let metadata_path = metadata_dir.join(format!("{name}.json"));
-        if metadata_path.exists() {
-            let metadata = load_metadata(&metadata_path)?;
-            table.add_row(vec![
-                Cell::new(metadata.name),
-                Cell::new(metadata.encrypted),
-                Cell::new(metadata.accounts.len()),
-            ]);
-        } else {
-            table.add_row(vec![
-                Cell::new(name),
-                Cell::new("unknown"),
-                Cell::new("unknown"),
-            ]);
-        }
-    }
-    println!("{table}");
-
-    Ok(())
-}
-
-fn wallet_info(storage: &StorageConfig, context: &ConfigContext, args: InfoArgs) -> Result<()> {
-    let storage = wallet_storage(storage, &args.name)?;
-    ensure_wallet_exists(&storage, &args.name)?;
-    let metadata = load_metadata(&storage.metadata_path)?;
-
-    match &metadata.wallet_type {
-        WalletType::Bip39 => {
-            println!("Wallet type: bip39");
-            println!("Compatibility: Ledger, Casper Wallet");
-        }
-        WalletType::Seeded => {
-            println!("Wallet type: seeded");
-            println!("Domain: {}", metadata.domain);
-            println!("Compatibility: explicit only");
-        }
-        WalletType::LegacyPem { public_key } => {
-            let key_kind = legacy_key_kind_from_public_key_hex(public_key)?;
-            println!("Origin: legacy secret key PEM");
-            println!("Key type: {}", key_kind);
-            println!("Public key: {}", public_key);
-            return Ok(());
-        }
-    }
-    match metadata.derivation {
-        DerivationScheme::Bip32Secp256k1 => {
-            println!("Derivation: bip32 (secp256k1)");
-        }
-        DerivationScheme::Slip10Ed25519 => {
-            println!("Derivation: slip0010 (ed25519)");
-        }
-    }
-    println!("Encrypted: {}", metadata.encrypted);
-    println!("Known accounts: {}", metadata.accounts.len());
-    if !metadata.accounts.is_empty() {
-        let (_network_name, rpc_endpoint) = network::active_network_rpc(context)?;
-        let account_identifiers = metadata
-            .accounts
-            .iter()
-            .map(|account| {
-                account_identifier_from_public_key_hex(&account.public_key)
-                    .with_context(|| format!("invalid public key for account '{}'", account.name))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let progress = balance_progress_bar(account_identifiers.len() as u64)?;
-        let runtime = Runtime::new().context("failed to start async runtime")?;
-        let balances = runtime.block_on(async move {
-            let client = CasperClient::new(rpc_endpoint);
-            fetch_wallet_balances(&client, account_identifiers, &progress).await
-        })?;
-        let mut table = Table::new();
-        table.set_header(vec!["Name", "Path", "Public Key", "Balance"]);
-        for (account, balance) in metadata.accounts.iter().zip(balances.iter()) {
-            let balance_label = match balance {
-                Some(motes) => format!("{} CSPR", crate::utils::format_cspr(motes)),
-                None => "0 CSPR".to_string(),
-            };
-            table.add_row(vec![
-                Cell::new(&account.name),
-                Cell::new(&account.path),
-                Cell::new(&account.public_key),
-                Cell::new(balance_label),
-            ]);
-        }
-        println!("{table}");
-    }
-
-    Ok(())
-}
-
-fn balance_progress_bar(total: u64) -> Result<ProgressBar> {
-    if total == 0 {
-        return Ok(ProgressBar::hidden());
-    }
-    let bar = ProgressBar::new(total);
-    let style = ProgressStyle::with_template("{msg} [{bar:40}] {pos}/{len}")
-        .context("failed to set progress bar style")?
-        .progress_chars("=>-");
-    bar.set_style(style);
-    bar.set_message("Querying balances");
-    Ok(bar)
-}
-
-async fn fetch_wallet_balances(
-    client: &CasperClient,
-    account_identifiers: Vec<AccountIdentifier>,
-    progress: &ProgressBar,
-) -> Result<Vec<Option<U512>>> {
-    let mut balances = Vec::with_capacity(account_identifiers.len());
-    for account_identifier in account_identifiers {
-        let balance = client.get_balance(account_identifier).await?;
-        progress.inc(1);
-        balances.push(balance);
-    }
-    progress.finish_and_clear();
-    Ok(balances)
-}
-
-fn account_identifier_from_public_key_hex(input: &str) -> Result<AccountIdentifier> {
-    let public_key = public_key_from_hex(input)?;
-    Ok(AccountIdentifier::PublicKey(public_key))
-}
 
 fn public_key_from_hex(input: &str) -> Result<PublicKey> {
     let bytes = hex::decode(input).context("invalid public key hex")?;
     let public_key: PublicKey =
         deserialize_from_slice(&bytes).map_err(|_| anyhow!("invalid public key bytes"))?;
     Ok(public_key)
-}
-
-fn secret_key_bytes(secret_key: &SecretKey) -> Result<Vec<u8>> {
-    match secret_key {
-        SecretKey::System => bail!("secret key cannot be system key"),
-        SecretKey::Ed25519(key) => {
-            let mut bytes = Vec::with_capacity(1 + SecretKey::ED25519_LENGTH);
-            bytes.push(ED25519_TAG);
-            bytes.extend_from_slice(&key.to_bytes());
-            Ok(bytes)
-        }
-        SecretKey::Secp256k1(key) => {
-            let raw_bytes = key.to_bytes();
-            let raw_bytes: &[u8] = raw_bytes.as_ref();
-            let mut bytes = Vec::with_capacity(1 + raw_bytes.len());
-            bytes.push(SECP256K1_TAG);
-            bytes.extend_from_slice(raw_bytes);
-            Ok(bytes)
-        }
-        _ => bail!("unsupported secret key variant"),
-    }
-}
-
-fn public_key_hex(secret_key: &SecretKey) -> Result<String> {
-    let public_key = PublicKey::from(secret_key);
-    if matches!(public_key, PublicKey::System) {
-        bail!("secret key cannot be system key");
-    }
-    let public_key_bytes = public_key
-        .to_bytes()
-        .map_err(|err| anyhow!(err.to_string()))?;
-    Ok(hex::encode(public_key_bytes))
-}
-
-fn wallet_derive(storage: &StorageConfig, context: &ConfigContext, args: DeriveArgs) -> Result<()> {
-    let wallet_storage = wallet_storage(storage, &args.wallet_name)?;
-    ensure_wallet_exists(&wallet_storage, &args.wallet_name)?;
-    let mut metadata = load_metadata(&wallet_storage.metadata_path)?;
-    if matches!(&metadata.wallet_type, WalletType::LegacyPem { .. }) {
-        bail!("legacy secret key wallets do not support account derivation");
-    }
-    let root_secret = wallet_storage
-        .storage
-        .load(&args.wallet_name)
-        .map_err(|err| anyhow!(err.to_string()))?;
-    let mut seed = root_seed(&root_secret)?;
-    let result = (|| -> Result<()> {
-        let mut updated = false;
-        let end = args.start.saturating_add(args.count);
-        if args.count > 0
-            && metadata
-                .accounts
-                .iter()
-                .any(|account| account.index >= args.start && account.index < end)
-        {
-            bail!("requested derivation range overlaps existing accounts");
-        }
-
-        let name_template = args.name.as_str();
-        if name_template.is_empty() {
-            bail!("account name template cannot be empty");
-        }
-        let (network_name, chain_name) = network::active_network_name_and_chain_name(context)?;
-        let mut names = TinyTemplate::new();
-        names
-            .add_template("name", name_template)
-            .map_err(|err| anyhow!("invalid account name template: {err}"))?;
-        let mut seen_names = metadata
-            .accounts
-            .iter()
-            .map(|account| account.name.clone())
-            .collect::<HashSet<_>>();
-        let mut derived_names = Vec::new();
-        for index in args.start..end {
-            let index1 = index
-                .checked_add(1)
-                .ok_or_else(|| anyhow!("index1 overflows for index {index}"))?;
-            let context = DeriveNameContext {
-                counter: index - args.start,
-                counter1: (index - args.start)
-                    .checked_add(1)
-                    .ok_or_else(|| anyhow!("i1 overflows for i {}", index - args.start))?,
-                index,
-                index1,
-                wallet: &args.wallet_name,
-                network: &network_name,
-                chain_name: &chain_name,
-            };
-            let name = names
-                .render("name", &context)
-                .map_err(|err| anyhow!("failed to render account name for index {index}: {err}"))?;
-            if name.is_empty() {
-                bail!("derived account name cannot be empty");
-            }
-            if name.starts_with('-') {
-                bail!("derived account name cannot start with '-'");
-            }
-            if !seen_names.insert(name.clone()) {
-                bail!("account name '{name}' already exists");
-            }
-            derived_names.push((index, name));
-        }
-
-        let mut table = Table::new();
-        table.set_header(vec!["Name", "Path", "Public Key"]);
-        for (index, name) in derived_names {
-            let (path, secret_key) = match metadata.derivation {
-                DerivationScheme::Bip32Secp256k1 => {
-                    let path = format!("{}/{}", DEFAULT_BIP32_SECP256K1_PATH_PREFIX, index);
-                    let derivation_path = path.parse::<DerivationPath>()?;
-                    let xprv = XPrv::derive_from_path(&seed, &derivation_path)?;
-                    let mut secret_key_bytes = xprv.to_bytes();
-                    let secret_key = SecretKey::secp256k1_from_bytes(secret_key_bytes)
-                        .map_err(|err| anyhow!(err.to_string()))?;
-                    secret_key_bytes.zeroize();
-                    (path, secret_key)
-                }
-                DerivationScheme::Slip10Ed25519 => {
-                    let path = slip0010::default_path(index);
-                    let indexes = slip0010::parse_hardened_path(&path)?;
-                    let mut secret_key_bytes = slip0010::derive_private_key(&seed, &indexes)?;
-                    let secret_key = SecretKey::ed25519_from_bytes(secret_key_bytes)
-                        .map_err(|err| anyhow!(err.to_string()))?;
-                    secret_key_bytes.zeroize();
-                    (path, secret_key)
-                }
-            };
-
-            let public_key_hex = public_key_hex(&secret_key)?;
-            table.add_row(vec![
-                Cell::new(&name),
-                Cell::new(&path),
-                Cell::new(&public_key_hex),
-            ]);
-
-            if args.show_private {
-                let mut private_key_bytes = secret_key_bytes(&secret_key)?;
-                println!("Private key: {}", hex::encode(&private_key_bytes));
-                private_key_bytes.zeroize();
-            }
-
-            if add_account(&mut metadata, &name, index, &path, &public_key_hex) {
-                updated = true;
-            }
-        }
-
-        if updated {
-            save_metadata(&wallet_storage.metadata_path, &metadata)?;
-        }
-
-        if args.count > 0 {
-            println!("{table}");
-        }
-
-        Ok(())
-    })();
-    seed.zeroize();
-    result
-}
-
-fn wallet_rename(storage: &StorageConfig, args: RenameArgs) -> Result<()> {
-    let storage = wallet_storage(storage, &args.wallet_name)?;
-    ensure_wallet_exists(&storage, &args.wallet_name)?;
-    let mut metadata = load_metadata(&storage.metadata_path)?;
-    if matches!(&metadata.wallet_type, WalletType::LegacyPem { .. }) {
-        bail!("legacy secret key wallets do not contain accounts");
-    }
-
-    if args.new_name.is_empty() {
-        bail!("new account name cannot be empty");
-    }
-    if args.new_name.starts_with('-') {
-        bail!("account name cannot start with '-'");
-    }
-    if args.old_name == args.new_name {
-        bail!("new account name matches the existing name");
-    }
-    if metadata
-        .accounts
-        .iter()
-        .any(|account| account.name == args.new_name)
-    {
-        bail!("account name '{}' already exists", args.new_name);
-    }
-
-    let mut renamed = false;
-    for account in &mut metadata.accounts {
-        if account.name == args.old_name {
-            account.name = args.new_name.clone();
-            renamed = true;
-            break;
-        }
-    }
-
-    if !renamed {
-        bail!("account '{}' not found", args.old_name);
-    }
-
-    save_metadata(&storage.metadata_path, &metadata)?;
-    println!("Renamed account '{}' to '{}'", args.old_name, args.new_name);
-    Ok(())
-}
-
-fn wallet_delete(storage: &StorageConfig, args: DeleteArgs) -> Result<()> {
-    let storage = wallet_storage(storage, &args.name)?;
-    let metadata_exists = storage.metadata_path.exists();
-    let secret_exists = storage
-        .storage
-        .exists(&args.name)
-        .map_err(|err| anyhow!(err.to_string()))?;
-    if !metadata_exists && !secret_exists {
-        bail!("wallet '{}' does not exist; create it first", args.name);
-    }
-
-    storage
-        .storage
-        .delete(&args.name)
-        .map_err(|err| anyhow!(err.to_string()))?;
-    match fs::remove_file(&storage.metadata_path) {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => return Err(err.into()),
-    }
-    println!("Deleted wallet '{}'", args.name);
-    Ok(())
-}
-
-fn wallet_external(storage: &StorageConfig, args: Vec<String>) -> Result<()> {
-    if args.len() >= 2 && args[1] == "rename" {
-        if args.len() == 4 && (args[3] == "--help" || args[3] == "-h") {
-            print_wallet_rename_help();
-            return Ok(());
-        }
-        if args.len() != 4 {
-            bail!("usage: casper wallet <wallet-name> rename-account <old-name> <new-name>");
-        }
-        return wallet_rename(
-            storage,
-            RenameArgs {
-                wallet_name: args[0].clone(),
-                old_name: args[2].clone(),
-                new_name: args[3].clone(),
-            },
-        );
-    }
-    if args.len() >= 2 && args[1] == "rename-account" {
-        if args.len() == 4 && (args[3] == "--help" || args[3] == "-h") {
-            print_wallet_rename_help();
-            return Ok(());
-        }
-        if args.len() != 4 {
-            bail!("usage: casper wallet <wallet-name> rename-account <old-name> <new-name>");
-        }
-        return wallet_rename(
-            storage,
-            RenameArgs {
-                wallet_name: args[0].clone(),
-                old_name: args[2].clone(),
-                new_name: args[3].clone(),
-            },
-        );
-    }
-
-    bail!("unsupported wallet command: {}", args.join(" "))
-}
-
-fn print_wallet_rename_help() {
-    println!("Usage: casper wallet <wallet-name> rename-account <old-name> <new-name>");
-    println!();
-    println!("Renames an existing account in the wallet.");
 }
 
 struct WalletStorage {
