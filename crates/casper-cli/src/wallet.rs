@@ -6,15 +6,18 @@ use anyhow::{Context, Result, anyhow, bail};
 use bip32::{DerivationPath, Language, Mnemonic, XPrv};
 use blake2::Blake2bVar;
 use blake2::digest::{Update, VariableOutput};
-use casper_types::SecretKey;
+use casper_types::{PublicKey, SecretKey, U512, bytesrepr::deserialize_from_slice};
 use clap::{Args, Subcommand};
 use comfy_table::{Cell, Table};
+use indicatif::{ProgressBar, ProgressStyle};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tinytemplate::TinyTemplate;
+use tokio::runtime::Runtime;
+use veles_casper_rust_sdk::jsonrpc::{AccountIdentifier, CasperClient};
 
 const WALLET_DIR_NAME: &str = "wallets";
 const DEFAULT_PATH_PREFIX: &str = "m/44'/506'/0'/0";
@@ -163,7 +166,7 @@ pub fn handle(storage: &StorageConfig, context: &ConfigContext, args: WalletArgs
         WalletCommand::Create(command) => create_wallet(storage, command),
         WalletCommand::Recover(command) => recover_wallet(storage, command),
         WalletCommand::List => wallet_list(storage),
-        WalletCommand::Info(command) => wallet_info(storage, command),
+        WalletCommand::Info(command) => wallet_info(storage, context, command),
         WalletCommand::Derive(command) => wallet_derive(storage, context, command),
         WalletCommand::RenameAccount(command) => wallet_rename(storage, command),
         WalletCommand::Delete(command) => wallet_delete(storage, command),
@@ -369,10 +372,10 @@ fn wallet_list(storage: &StorageConfig) -> Result<()> {
     Ok(())
 }
 
-fn wallet_info(storage: &StorageConfig, args: InfoArgs) -> Result<()> {
+fn wallet_info(storage: &StorageConfig, context: &ConfigContext, args: InfoArgs) -> Result<()> {
     let storage = wallet_storage(storage, &args.name)?;
     ensure_wallet_exists(&storage, &args.name)?;
-    let mut metadata = load_metadata(&storage.metadata_path)?;
+    let metadata = load_metadata(&storage.metadata_path)?;
 
     match metadata.wallet_type {
         WalletType::Bip39 => {
@@ -388,19 +391,74 @@ fn wallet_info(storage: &StorageConfig, args: InfoArgs) -> Result<()> {
     println!("Encrypted: {}", metadata.encrypted);
     println!("Known accounts: {}", metadata.accounts.len());
     if !metadata.accounts.is_empty() {
+        let (_network_name, rpc_endpoint) = network::active_network_rpc(context)?;
+        let account_identifiers = metadata
+            .accounts
+            .iter()
+            .map(|account| {
+                account_identifier_from_public_key_hex(&account.public_key)
+                    .with_context(|| format!("invalid public key for account '{}'", account.name))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let progress = balance_progress_bar(account_identifiers.len() as u64)?;
+        let runtime = Runtime::new().context("failed to start async runtime")?;
+        let balances = runtime.block_on(async move {
+            let client = CasperClient::new(rpc_endpoint);
+            fetch_wallet_balances(&client, account_identifiers, &progress).await
+        })?;
         let mut table = Table::new();
-        table.set_header(vec!["Name", "Path", "Public Key"]);
-        for account in &mut metadata.accounts {
+        table.set_header(vec!["Name", "Path", "Public Key", "Balance"]);
+        for (account, balance) in metadata.accounts.iter().zip(balances.iter()) {
+            let balance_label = match balance {
+                Some(motes) => format!("{} CSPR", crate::utils::format_cspr(motes)),
+                None => "0 CSPR".to_string(),
+            };
             table.add_row(vec![
                 Cell::new(&account.name),
                 Cell::new(&account.path),
                 Cell::new(&account.public_key),
+                Cell::new(balance_label),
             ]);
         }
         println!("{table}");
     }
 
     Ok(())
+}
+
+fn balance_progress_bar(total: u64) -> Result<ProgressBar> {
+    if total == 0 {
+        return Ok(ProgressBar::hidden());
+    }
+    let bar = ProgressBar::new(total);
+    let style = ProgressStyle::with_template("{msg} [{bar:40}] {pos}/{len}")
+        .context("failed to set progress bar style")?
+        .progress_chars("=>-");
+    bar.set_style(style);
+    bar.set_message("Querying balances");
+    Ok(bar)
+}
+
+async fn fetch_wallet_balances(
+    client: &CasperClient,
+    account_identifiers: Vec<AccountIdentifier>,
+    progress: &ProgressBar,
+) -> Result<Vec<Option<U512>>> {
+    let mut balances = Vec::with_capacity(account_identifiers.len());
+    for account_identifier in account_identifiers {
+        let balance = client.get_balance(account_identifier).await?;
+        progress.inc(1);
+        balances.push(balance);
+    }
+    progress.finish_and_clear();
+    Ok(balances)
+}
+
+fn account_identifier_from_public_key_hex(input: &str) -> Result<AccountIdentifier> {
+    let bytes = hex::decode(input).context("invalid public key hex")?;
+    let public_key: PublicKey =
+        deserialize_from_slice(&bytes).map_err(|_| anyhow!("invalid public key bytes"))?;
+    Ok(AccountIdentifier::PublicKey(public_key))
 }
 
 fn wallet_derive(storage: &StorageConfig, context: &ConfigContext, args: DeriveArgs) -> Result<()> {

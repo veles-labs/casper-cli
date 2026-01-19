@@ -106,7 +106,7 @@ casper-cli wallet list
 
 ### wallet info
 
-Shows wallet type, encryption state, and known accounts.
+Shows wallet type, encryption state, known accounts, and their balances on the active network (missing accounts show `0 CSPR`).
 
 ```bash
 casper-cli wallet info mywallet
