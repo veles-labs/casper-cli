@@ -79,6 +79,14 @@ casper-cli wallet create mywallet --bip32
 casper-cli wallet create mywallet --slip10
 ```
 
+Mnemonic word count (12, 15, 18, 21, 24; default 24):
+
+```bash
+casper-cli wallet create mywallet --words 12
+casper-cli wallet create mywallet --slip10 --words 24
+casper-cli wallet create mywallet --words 21
+```
+
 Seeded (deterministic) wallets:
 
 ```bash

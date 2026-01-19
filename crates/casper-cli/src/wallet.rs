@@ -4,7 +4,8 @@ use crate::secure_storage::{RootSecret, SecureStorage, StorageBackendKind, Store
 use crate::slip0010;
 use crate::storage::StorageConfig;
 use anyhow::{Context, Result, anyhow, bail};
-use bip32::{DerivationPath, Language, Mnemonic, XPrv};
+use bip32::{DerivationPath, XPrv};
+use bip39::{Language, Mnemonic};
 use blake2::Blake2bVar;
 use blake2::digest::{Update, VariableOutput};
 use casper_types::{
@@ -27,6 +28,17 @@ use zeroize::Zeroize;
 
 const WALLET_DIR_NAME: &str = "wallets";
 const DEFAULT_BIP32_SECP256K1_PATH_PREFIX: &str = "m/44'/506'/0'/0";
+
+fn parse_word_count(value: &str) -> std::result::Result<u16, String> {
+    match value {
+        "12" => Ok(12),
+        "15" => Ok(15),
+        "18" => Ok(18),
+        "21" => Ok(21),
+        "24" => Ok(24),
+        _ => Err("word count must be 12, 15, 18, 21, or 24".to_string()),
+    }
+}
 
 #[derive(Args)]
 /// Wallet-related CLI entry point.
@@ -74,6 +86,9 @@ pub struct CreateArgs {
     /// Use SLIP-0010 ed25519 derivation.
     #[arg(long, conflicts_with = "bip32")]
     slip10: bool,
+    /// BIP-39 word count (12, 15, 18, 21, or 24). Defaults to 24.
+    #[arg(long, value_parser = parse_word_count)]
+    words: Option<u16>,
     /// Deterministic seed input (requires --domain).
     #[arg(long)]
     seed: Option<String>,
@@ -388,6 +403,9 @@ fn create_wallet(storage: &StorageConfig, args: CreateArgs) -> Result<()> {
     if args.bip39 && using_seed {
         bail!("--bip39 is mutually exclusive with --seed/--domain");
     }
+    if using_seed && args.words.is_some() {
+        bail!("--words is only valid with BIP-39 mnemonics");
+    }
     let derivation = derivation_from_flags(args.bip32, args.slip10)?;
 
     let root_secret = if using_seed {
@@ -396,7 +414,9 @@ fn create_wallet(storage: &StorageConfig, args: CreateArgs) -> Result<()> {
         warn_seeded_wallet(&domain);
         RootSecret::Seeded { seed, domain }
     } else {
-        let mnemonic = Mnemonic::random(OsRng, Language::English);
+        let word_count = args.words.unwrap_or(24) as usize;
+        let mnemonic = Mnemonic::generate_in_with(&mut OsRng, Language::English, word_count)
+            .map_err(|err| anyhow!("failed to generate mnemonic: {err}"))?;
         let passphrase = prompt_passphrase("Enter optional BIP-39 passphrase: ")?;
 
         if passphrase.is_empty() {
@@ -405,9 +425,9 @@ fn create_wallet(storage: &StorageConfig, args: CreateArgs) -> Result<()> {
             println!("Passphrase: (set; stored in secure storage)");
         }
 
-        println!("Mnemonic: {}", mnemonic.phrase());
+        println!("Mnemonic: {}", mnemonic);
         RootSecret::Bip39 {
-            mnemonic: mnemonic.phrase().to_string(),
+            mnemonic: mnemonic.to_string(),
             passphrase,
         }
     };
@@ -443,8 +463,8 @@ fn recover_wallet(storage: &StorageConfig, args: RecoverArgs) -> Result<()> {
     ensure_wallet_absent(&wallet_storage, &args.name)?;
 
     let mnemonic_input = prompt_mnemonic()?;
-    let mnemonic = Mnemonic::new(mnemonic_input, Language::English)
-        .map_err(|_| anyhow!("invalid mnemonic"))?;
+    let mnemonic = Mnemonic::parse_in(Language::English, mnemonic_input)
+        .map_err(|err| anyhow!("invalid mnemonic: {err}"))?;
     let passphrase = prompt_passphrase("Enter optional BIP-39 passphrase: ")?;
 
     let uses_master_password = wallet_storage.storage.uses_master_password();
@@ -456,7 +476,7 @@ fn recover_wallet(storage: &StorageConfig, args: RecoverArgs) -> Result<()> {
     let derivation = derivation_from_flags(args.bip32, args.slip10)?;
 
     let root_secret = RootSecret::Bip39 {
-        mnemonic: mnemonic.phrase().to_string(),
+        mnemonic: mnemonic.to_string(),
         passphrase,
     };
 
@@ -1174,9 +1194,9 @@ fn root_seed(root_secret: &RootSecret) -> Result<Vec<u8>> {
             mnemonic,
             passphrase,
         } => {
-            let mnemonic = Mnemonic::new(mnemonic, Language::English)
+            let mnemonic = Mnemonic::parse_in(Language::English, mnemonic)
                 .map_err(|_| anyhow!("invalid stored mnemonic"))?;
-            Ok(mnemonic.to_seed(passphrase).as_bytes().to_vec())
+            Ok(mnemonic.to_seed(passphrase).to_vec())
         }
         RootSecret::Seeded { seed, domain } => Ok(seeded_entropy(domain, seed)?.to_vec()),
         RootSecret::LegacyPem { .. } => {

@@ -44,6 +44,7 @@ futures-util = "0.3.31"
 url = "2.5.8"
 rustls = { version = "0.23.36", features = ["ring", "std", "tls12"], default-features = false }
 indicatif = "0.18.3"
+bip39 = { version = "2.2.2", features = ["rand_core"] }
 
 [dev-dependencies]
 tempfile = "3"
