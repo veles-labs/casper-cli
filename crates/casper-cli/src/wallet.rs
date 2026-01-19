@@ -6,7 +6,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use bip32::{DerivationPath, Language, Mnemonic, XPrv};
 use blake2::Blake2bVar;
 use blake2::digest::{Update, VariableOutput};
-use casper_types::{PublicKey, SecretKey, U512, bytesrepr::deserialize_from_slice};
+use casper_types::{
+    PublicKey, SecretKey, U512,
+    bytesrepr::{ToBytes, deserialize_from_slice},
+};
 use clap::{Args, Subcommand};
 use comfy_table::{Cell, Table};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -14,6 +17,7 @@ use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use tinytemplate::TinyTemplate;
 use tokio::runtime::Runtime;
@@ -36,6 +40,9 @@ pub enum WalletCommand {
     Create(CreateArgs),
     /// Recover a wallet from a mnemonic.
     Recover(RecoverArgs),
+    /// Import a legacy secret key PEM as a wallet.
+    #[command(name = "import-legacy")]
+    ImportLegacy(ImportLegacyArgs),
     /// List wallets in the configured storage directory.
     List,
     /// Show wallet metadata and known accounts.
@@ -75,6 +82,19 @@ pub struct CreateArgs {
 pub struct RecoverArgs {
     /// Name for the wallet.
     name: String,
+    /// Store wallet secrets unencrypted (unsafe).
+    #[arg(long)]
+    unencrypted: bool,
+}
+
+#[derive(Args)]
+/// Arguments for importing a legacy secret key PEM.
+pub struct ImportLegacyArgs {
+    /// Name for the wallet.
+    name: String,
+    /// Path to the legacy secret key PEM (defaults to stdin).
+    #[arg(long, value_name = "PATH")]
+    pem_file: Option<PathBuf>,
     /// Store wallet secrets unencrypted (unsafe).
     #[arg(long)]
     unencrypted: bool,
@@ -146,11 +166,12 @@ struct WalletMetadata {
     accounts: Vec<DerivedAccount>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum WalletType {
     Bip39,
     Seeded,
+    LegacyPem { public_key: String },
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -165,6 +186,7 @@ pub fn handle(storage: &StorageConfig, context: &ConfigContext, args: WalletArgs
     match args.command {
         WalletCommand::Create(command) => create_wallet(storage, command),
         WalletCommand::Recover(command) => recover_wallet(storage, command),
+        WalletCommand::ImportLegacy(command) => import_legacy_wallet(storage, command),
         WalletCommand::List => wallet_list(storage),
         WalletCommand::Info(command) => wallet_info(storage, context, command),
         WalletCommand::Derive(command) => wallet_derive(storage, context, command),
@@ -184,6 +206,9 @@ pub fn resolve_account_public_key(
         bail!("wallet '{}' does not exist; create it first", wallet_name);
     }
     let metadata = load_metadata(&storage.metadata_path)?;
+    if matches!(&metadata.wallet_type, WalletType::LegacyPem { .. }) {
+        bail!("legacy secret key wallets do not contain accounts");
+    }
     for account in &metadata.accounts {
         if account.name == account_name {
             return Ok(account.public_key.clone());
@@ -204,6 +229,9 @@ pub fn resolve_account_secret_key(
     let storage = wallet_storage(storage, wallet_name)?;
     ensure_wallet_exists(&storage, wallet_name)?;
     let metadata = load_metadata(&storage.metadata_path)?;
+    if matches!(&metadata.wallet_type, WalletType::LegacyPem { .. }) {
+        bail!("legacy secret key wallets do not contain accounts");
+    }
     let account = metadata
         .accounts
         .iter()
@@ -223,6 +251,82 @@ pub fn resolve_account_secret_key(
     let derivation_path = account.path.parse::<DerivationPath>()?;
     let xprv = XPrv::derive_from_path(&seed, &derivation_path)?;
     SecretKey::secp256k1_from_bytes(xprv.to_bytes()).map_err(|err| anyhow!(err.to_string()))
+}
+
+pub(crate) fn try_resolve_legacy_secret_key(
+    storage: &StorageConfig,
+    wallet_name: &str,
+) -> Result<Option<SecretKey>> {
+    let Some((wallet_storage, metadata)) = load_wallet_metadata_if_exists(storage, wallet_name)?
+    else {
+        return Ok(None);
+    };
+    if !matches!(&metadata.wallet_type, WalletType::LegacyPem { .. }) {
+        bail!(
+            "wallet '{}' is not a legacy secret key wallet; use <wallet>:<account>",
+            wallet_name
+        );
+    }
+    let root_secret = wallet_storage
+        .storage
+        .load(wallet_name)
+        .map_err(|err| anyhow!(err.to_string()))?;
+    let secret_key = legacy_secret_key_from_root(&root_secret)?;
+    Ok(Some(secret_key))
+}
+
+pub(crate) fn try_resolve_legacy_public_key(
+    storage: &StorageConfig,
+    wallet_name: &str,
+) -> Result<Option<String>> {
+    let Some((_wallet_storage, metadata)) = load_wallet_metadata_if_exists(storage, wallet_name)?
+    else {
+        return Ok(None);
+    };
+    let public_key_hex = match &metadata.wallet_type {
+        WalletType::LegacyPem { public_key } => public_key.clone(),
+        _ => return Ok(None),
+    };
+    let _ = legacy_key_kind_from_public_key_hex(&public_key_hex)?;
+    Ok(Some(public_key_hex))
+}
+
+fn legacy_secret_key_from_root(root_secret: &RootSecret) -> Result<SecretKey> {
+    match root_secret {
+        RootSecret::LegacyPem { pem } => secret_key_from_pem(pem),
+        _ => bail!("wallet secret is not a legacy secret key PEM"),
+    }
+}
+
+fn legacy_public_key_hex_from_root(root_secret: &RootSecret) -> Result<String> {
+    let secret_key = legacy_secret_key_from_root(root_secret)?;
+    let public_key = PublicKey::from(&secret_key);
+    if matches!(public_key, PublicKey::System) {
+        bail!("legacy secret key cannot be system key");
+    }
+    let public_key_bytes = public_key
+        .to_bytes()
+        .map_err(|err| anyhow!(err.to_string()))?;
+    Ok(hex::encode(public_key_bytes))
+}
+
+fn legacy_key_kind_from_public_key_hex(public_key_hex: &str) -> Result<&'static str> {
+    let public_key = public_key_from_hex(public_key_hex)?;
+    match public_key {
+        PublicKey::Ed25519(_) => Ok("ed25519"),
+        PublicKey::Secp256k1(_) => Ok("secp256k1"),
+        PublicKey::System => bail!("legacy public key cannot be system key"),
+        _ => bail!("unsupported legacy public key type"),
+    }
+}
+
+fn secret_key_from_pem(pem: &str) -> Result<SecretKey> {
+    let secret_key = SecretKey::from_pem(pem.as_bytes())
+        .map_err(|err| anyhow!("invalid legacy secret key PEM: {err}"))?;
+    if matches!(secret_key, SecretKey::System) {
+        bail!("legacy secret key cannot be system key");
+    }
+    Ok(secret_key)
 }
 
 fn create_wallet(storage: &StorageConfig, args: CreateArgs) -> Result<()> {
@@ -263,7 +367,7 @@ fn create_wallet(storage: &StorageConfig, args: CreateArgs) -> Result<()> {
         }
     };
 
-    let (wallet_type, domain) = wallet_type_from_secret(&root_secret);
+    let (wallet_type, domain) = wallet_type_from_secret(&root_secret)?;
     let encrypted = if uses_master_password {
         !args.unencrypted
     } else {
@@ -309,7 +413,46 @@ fn recover_wallet(storage: &StorageConfig, args: RecoverArgs) -> Result<()> {
         passphrase,
     };
 
-    let (wallet_type, domain) = wallet_type_from_secret(&root_secret);
+    let (wallet_type, domain) = wallet_type_from_secret(&root_secret)?;
+    let encrypted = if uses_master_password {
+        !args.unencrypted
+    } else {
+        true
+    };
+    let metadata = WalletMetadata {
+        version: 1,
+        name: args.name.clone(),
+        storage: wallet_storage.storage.backend_kind(),
+        encrypted,
+        wallet_type,
+        domain,
+        accounts: Vec::new(),
+    };
+
+    wallet_storage
+        .storage
+        .store(&args.name, &root_secret, store_mode)
+        .map_err(|err| anyhow!(err.to_string()))?;
+    save_metadata(&wallet_storage.metadata_path, &metadata)?;
+    println!("Wallet saved to {}", wallet_storage.metadata_path.display());
+    Ok(())
+}
+
+fn import_legacy_wallet(storage: &StorageConfig, args: ImportLegacyArgs) -> Result<()> {
+    let wallet_storage = wallet_storage(storage, &args.name)?;
+    ensure_unencrypted_allowed(wallet_storage.storage.as_ref(), args.unencrypted)?;
+    ensure_wallet_absent(&wallet_storage, &args.name)?;
+
+    let pem = read_legacy_pem(args.pem_file.as_ref())?;
+
+    let uses_master_password = wallet_storage.storage.uses_master_password();
+    let store_mode = if args.unencrypted {
+        StoreMode::Unencrypted
+    } else {
+        StoreMode::Encrypted
+    };
+    let root_secret = RootSecret::LegacyPem { pem };
+    let (wallet_type, domain) = wallet_type_from_secret(&root_secret)?;
     let encrypted = if uses_master_password {
         !args.unencrypted
     } else {
@@ -377,7 +520,7 @@ fn wallet_info(storage: &StorageConfig, context: &ConfigContext, args: InfoArgs)
     ensure_wallet_exists(&storage, &args.name)?;
     let metadata = load_metadata(&storage.metadata_path)?;
 
-    match metadata.wallet_type {
+    match &metadata.wallet_type {
         WalletType::Bip39 => {
             println!("Wallet type: bip39");
             println!("Compatibility: Ledger, Casper Wallet");
@@ -386,6 +529,13 @@ fn wallet_info(storage: &StorageConfig, context: &ConfigContext, args: InfoArgs)
             println!("Wallet type: seeded");
             println!("Domain: {}", metadata.domain);
             println!("Compatibility: explicit only");
+        }
+        WalletType::LegacyPem { public_key } => {
+            let key_kind = legacy_key_kind_from_public_key_hex(public_key)?;
+            println!("Origin: legacy secret key PEM");
+            println!("Key type: {}", key_kind);
+            println!("Public key: {}", public_key);
+            return Ok(());
         }
     }
     println!("Encrypted: {}", metadata.encrypted);
@@ -455,16 +605,24 @@ async fn fetch_wallet_balances(
 }
 
 fn account_identifier_from_public_key_hex(input: &str) -> Result<AccountIdentifier> {
+    let public_key = public_key_from_hex(input)?;
+    Ok(AccountIdentifier::PublicKey(public_key))
+}
+
+fn public_key_from_hex(input: &str) -> Result<PublicKey> {
     let bytes = hex::decode(input).context("invalid public key hex")?;
     let public_key: PublicKey =
         deserialize_from_slice(&bytes).map_err(|_| anyhow!("invalid public key bytes"))?;
-    Ok(AccountIdentifier::PublicKey(public_key))
+    Ok(public_key)
 }
 
 fn wallet_derive(storage: &StorageConfig, context: &ConfigContext, args: DeriveArgs) -> Result<()> {
     let wallet_storage = wallet_storage(storage, &args.wallet_name)?;
     ensure_wallet_exists(&wallet_storage, &args.wallet_name)?;
     let mut metadata = load_metadata(&wallet_storage.metadata_path)?;
+    if matches!(&metadata.wallet_type, WalletType::LegacyPem { .. }) {
+        bail!("legacy secret key wallets do not support account derivation");
+    }
     let root_secret = wallet_storage
         .storage
         .load(&args.wallet_name)
@@ -572,6 +730,9 @@ fn wallet_rename(storage: &StorageConfig, args: RenameArgs) -> Result<()> {
     let storage = wallet_storage(storage, &args.wallet_name)?;
     ensure_wallet_exists(&storage, &args.wallet_name)?;
     let mut metadata = load_metadata(&storage.metadata_path)?;
+    if matches!(&metadata.wallet_type, WalletType::LegacyPem { .. }) {
+        bail!("legacy secret key wallets do not contain accounts");
+    }
 
     if args.new_name.is_empty() {
         bail!("new account name cannot be empty");
@@ -728,6 +889,37 @@ fn ensure_wallet_exists(storage: &WalletStorage, name: &str) -> Result<()> {
     Ok(())
 }
 
+fn load_wallet_metadata_if_exists(
+    storage: &StorageConfig,
+    name: &str,
+) -> Result<Option<(WalletStorage, WalletMetadata)>> {
+    let wallet_storage = wallet_storage(storage, name)?;
+    let metadata_exists = wallet_storage.metadata_path.exists();
+    let secret_exists = wallet_storage
+        .storage
+        .exists(name)
+        .map_err(|err| anyhow!(err.to_string()))?;
+    if !metadata_exists && !secret_exists {
+        return Ok(None);
+    }
+    if !metadata_exists {
+        bail!(
+            "wallet '{}' metadata missing at {}",
+            name,
+            wallet_storage.metadata_path.display()
+        );
+    }
+    if !secret_exists {
+        bail!(
+            "wallet '{}' secret missing at {}",
+            name,
+            wallet_storage.secret_location
+        );
+    }
+    let metadata = load_metadata(&wallet_storage.metadata_path)?;
+    Ok(Some((wallet_storage, metadata)))
+}
+
 fn ensure_wallet_absent(storage: &WalletStorage, name: &str) -> Result<()> {
     let metadata_exists = storage.metadata_path.exists();
     let metadata = if metadata_exists {
@@ -845,10 +1037,17 @@ fn add_account(
     true
 }
 
-fn wallet_type_from_secret(secret: &RootSecret) -> (WalletType, String) {
+fn wallet_type_from_secret(secret: &RootSecret) -> Result<(WalletType, String)> {
     match secret {
-        RootSecret::Bip39 { .. } => (WalletType::Bip39, "bip39".to_string()),
-        RootSecret::Seeded { domain, .. } => (WalletType::Seeded, domain.clone()),
+        RootSecret::Bip39 { .. } => Ok((WalletType::Bip39, "bip39".to_string())),
+        RootSecret::Seeded { domain, .. } => Ok((WalletType::Seeded, domain.clone())),
+        RootSecret::LegacyPem { .. } => {
+            let public_key = legacy_public_key_hex_from_root(secret)?;
+            Ok((
+                WalletType::LegacyPem { public_key },
+                "legacy_pem".to_string(),
+            ))
+        }
     }
 }
 
@@ -863,6 +1062,9 @@ fn root_seed(root_secret: &RootSecret) -> Result<Vec<u8>> {
             Ok(mnemonic.to_seed(passphrase).as_bytes().to_vec())
         }
         RootSecret::Seeded { seed, domain } => Ok(seeded_entropy(domain, seed)?.to_vec()),
+        RootSecret::LegacyPem { .. } => {
+            bail!("legacy secret key wallets do not support account derivation");
+        }
     }
 }
 
@@ -889,6 +1091,25 @@ fn prompt_mnemonic() -> Result<String> {
         bail!("mnemonic cannot be empty");
     }
     Ok(normalized)
+}
+
+fn read_legacy_pem(path: Option<&PathBuf>) -> Result<String> {
+    let pem = match path {
+        Some(path) => fs::read_to_string(path)
+            .with_context(|| format!("failed to read {}", path.display()))?,
+        None => {
+            let mut buffer = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buffer)
+                .context("failed to read legacy PEM from stdin")?;
+            buffer
+        }
+    };
+    let trimmed = pem.trim();
+    if trimmed.is_empty() {
+        bail!("legacy secret key PEM is empty");
+    }
+    Ok(trimmed.to_string())
 }
 
 fn warn_seeded_wallet(domain: &str) {

@@ -5,7 +5,7 @@ use casper_types::bytesrepr::{Bytes, deserialize_from_slice};
 use casper_types::contracts::ContractHash;
 use casper_types::{
     AddressableEntityHash, CLType, DeployHash, Digest, EntityVersion, PackageHash, PricingMode,
-    PublicKey, RuntimeArgs, Transaction, TransactionHash, TransactionRuntimeParams,
+    PublicKey, RuntimeArgs, SecretKey, Transaction, TransactionHash, TransactionRuntimeParams,
     TransactionV1Hash, TransferTarget, URef,
 };
 use clap::{Args, Subcommand};
@@ -57,7 +57,7 @@ pub struct PutArgs {
     /// Gas price tolerance (minimum 1).
     #[arg(long, default_value_t = DEFAULT_GAS_PRICE_TOLERANCE)]
     gas_price_tolerance: u8,
-    /// Wallet and account name in the form wallet:account.
+    /// Wallet/account reference (<wallet>:<account>) or legacy wallet name.
     #[arg(long)]
     from: String,
     /// Runtime argument in the form name:cltype=value or name=value (hex for Any).
@@ -88,7 +88,7 @@ pub struct CallArgs {
     /// Gas price tolerance (minimum 1).
     #[arg(long, default_value_t = DEFAULT_GAS_PRICE_TOLERANCE)]
     gas_price_tolerance: u8,
-    /// Wallet and account name in the form wallet:account.
+    /// Wallet/account reference (<wallet>:<account>) or legacy wallet name.
     #[arg(long)]
     from: String,
     /// Runtime argument in the form name:cltype=value or name=value (hex for Any).
@@ -111,10 +111,10 @@ pub struct CallArgs {
 #[derive(Args)]
 /// Arguments for transferring CSPR.
 pub struct TransferArgs {
-    /// Wallet and account name in the form wallet:account.
+    /// Wallet/account reference (<wallet>:<account>) or legacy wallet name.
     #[arg(long)]
     from: String,
-    /// Recipient wallet/account, public key bytes hex, or account hash bytes hex.
+    /// Recipient wallet/account, legacy wallet name, public key bytes hex, or account hash bytes hex.
     #[arg(long)]
     to: String,
     /// Amount in CSPR.
@@ -174,8 +174,7 @@ fn put_session(
         gas_price_tolerance: args.gas_price_tolerance,
         standard_payment: true,
     };
-    let (wallet_name, account_name) = parse_wallet_account(&args.from)?;
-    let secret_key = wallet::resolve_account_secret_key(storage, &wallet_name, &account_name)?;
+    let secret_key = resolve_from_secret_key(storage, &args.from)?;
     let chain_name = network::active_network_chain_name(context)?;
     let (network_name, rpc_endpoint) = network::active_network_rpc(context)?;
 
@@ -224,8 +223,7 @@ fn call_contract(
         gas_price_tolerance: args.gas_price_tolerance,
         standard_payment: true,
     };
-    let (wallet_name, account_name) = parse_wallet_account(&args.from)?;
-    let secret_key = wallet::resolve_account_secret_key(storage, &wallet_name, &account_name)?;
+    let secret_key = resolve_from_secret_key(storage, &args.from)?;
     let chain_name = network::active_network_chain_name(context)?;
     let (network_name, rpc_endpoint) = network::active_network_rpc(context)?;
 
@@ -301,8 +299,7 @@ fn transfer(
 ) -> Result<()> {
     let amount = utils::parse_cspr_to_motes("transfer amount", &args.amount)?;
     let target = resolve_transfer_target(storage, &args.to)?;
-    let (wallet_name, account_name) = parse_wallet_account(&args.from)?;
-    let secret_key = wallet::resolve_account_secret_key(storage, &wallet_name, &account_name)?;
+    let secret_key = resolve_from_secret_key(storage, &args.from)?;
     let chain_name = network::active_network_chain_name(context)?;
     let (network_name, rpc_endpoint) = network::active_network_rpc(context)?;
 
@@ -386,14 +383,17 @@ fn get_transaction(context: &network::ConfigContext, args: GetArgs) -> Result<()
     Ok(())
 }
 
-fn parse_wallet_account(value: &str) -> Result<(String, String)> {
-    let (wallet_name, account_name) = value
-        .split_once(':')
-        .ok_or_else(|| anyhow!("--from must be in the form wallet:account"))?;
-    if wallet_name.is_empty() || account_name.is_empty() {
-        bail!("--from must be in the form wallet:account");
+fn resolve_from_secret_key(storage: &StorageConfig, value: &str) -> Result<SecretKey> {
+    if let Some((wallet_name, account_name)) = value.split_once(':') {
+        if wallet_name.is_empty() || account_name.is_empty() {
+            bail!("--from must be in the form wallet:account or a legacy wallet name");
+        }
+        return wallet::resolve_account_secret_key(storage, wallet_name, account_name);
     }
-    Ok((wallet_name.to_string(), account_name.to_string()))
+    if let Some(secret_key) = wallet::try_resolve_legacy_secret_key(storage, value)? {
+        return Ok(secret_key);
+    }
+    bail!("--from must be in the form wallet:account or a legacy wallet name");
 }
 
 fn parse_runtime_args(values: &[String]) -> Result<RuntimeArgs> {
@@ -532,6 +532,9 @@ fn resolve_transfer_target(storage: &StorageConfig, value: &str) -> Result<Trans
         }
         let public_key_hex =
             wallet::resolve_account_public_key(storage, wallet_name, account_name)?;
+        return parse_transfer_target(&public_key_hex);
+    }
+    if let Some(public_key_hex) = wallet::try_resolve_legacy_public_key(storage, trimmed)? {
         return parse_transfer_target(&public_key_hex);
     }
     parse_transfer_target(trimmed)

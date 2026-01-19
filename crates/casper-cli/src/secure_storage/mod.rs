@@ -17,6 +17,9 @@ pub enum RootSecret {
         seed: String,
         domain: String,
     },
+    LegacyPem {
+        pem: String,
+    },
 }
 
 impl Drop for RootSecret {
@@ -32,6 +35,9 @@ impl Drop for RootSecret {
             RootSecret::Seeded { seed, domain } => {
                 seed.zeroize();
                 domain.zeroize();
+            }
+            RootSecret::LegacyPem { pem } => {
+                pem.zeroize();
             }
         }
     }

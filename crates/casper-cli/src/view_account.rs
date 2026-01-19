@@ -15,7 +15,7 @@ const ACCOUNT_HASH_LEN: usize = 32;
 #[derive(Args)]
 /// Arguments for viewing account details.
 pub struct ViewAccountArgs {
-    /// Wallet/account reference (<wallet>:<account>), account hash hex, or public key hex.
+    /// Wallet/account reference (<wallet>:<account>), legacy wallet name, account hash hex, or public key hex.
     name: String,
 }
 
@@ -75,6 +75,9 @@ fn resolve_account_identifier(storage: &StorageConfig, input: &str) -> Result<Ac
         }
         let public_key_hex =
             wallet::resolve_account_public_key(storage, wallet_name, account_name)?;
+        return parse_account_identifier(&public_key_hex);
+    }
+    if let Some(public_key_hex) = wallet::try_resolve_legacy_public_key(storage, input)? {
         return parse_account_identifier(&public_key_hex);
     }
     parse_account_identifier(input)

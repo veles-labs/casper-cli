@@ -96,6 +96,20 @@ Recovers a wallet from a BIP-39 mnemonic. This will prompt for the mnemonic and 
 casper-cli wallet recover mywallet
 ```
 
+### wallet import-legacy
+
+Imports a legacy secret key PEM into a wallet. Legacy wallets do not support derivation or accounts.
+
+```bash
+casper-cli wallet import-legacy mywallet --pem-file /path/to/secret_key.pem
+```
+
+Stdin form:
+
+```bash
+cat /path/to/secret_key.pem | casper-cli wallet import-legacy mywallet
+```
+
 ### wallet list
 
 Lists all wallets in the storage directory.
@@ -106,7 +120,7 @@ casper-cli wallet list
 
 ### wallet info
 
-Shows wallet type, encryption state, known accounts, and their balances on the active network (missing accounts show `0 CSPR`).
+Shows wallet type, encryption state, known accounts, and their balances on the active network (missing accounts show `0 CSPR`). Legacy wallets show their origin, key type, and public key.
 
 ```bash
 casper-cli wallet info mywallet
@@ -201,20 +215,22 @@ casper-cli network list
 
 ## Balance command
 
-Fetches the balance for a wallet account, account hash hex, or a raw public key hex. The active network is read from `config.toml`.
+Fetches the balance for a wallet account, legacy wallet name, account hash hex, or a raw public key hex. The active network is read from `config.toml`.
 
 ```bash
 casper-cli balance mywallet:account-0
+casper-cli balance legacywallet
 casper-cli balance 0202c1...deadbeef
 casper-cli balance <account-hash-hex>
 ```
 
 ## View account command
 
-Fetches account details from the active network and prints named keys.
+Fetches account details from the active network and prints named keys for a wallet account, legacy wallet name, or raw identifier.
 
 ```bash
 casper-cli view-account mywallet:account-0
+casper-cli view-account legacywallet
 casper-cli view-account <public-key-hex>
 casper-cli view-account <account-hash-hex>
 ```
@@ -232,6 +248,7 @@ casper-cli config edit
 ## Transaction commands
 
 Simulation uses the network binary port; set `binary_port` (`address:port`, `tcp://address:port`, `ws://address[:port]/path`, or `wss://address[:port]/path`) in `config.toml` before using `--simulate`.
+Wallet references use `wallet:account`; legacy wallets can be referenced by wallet name alone.
 The simulator runs a local execution engine and will download trie objects from the node via the
 binary port as needed. Unlike speculative execution, it can report return values, which can be
 useful for calls like `balance_of` on a CEP-18 token without reconstructing dictionary item keys
