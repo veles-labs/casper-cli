@@ -9,4 +9,5 @@
 - Use atomic writes and restrictive file permissions (0600 files, 0700 dirs) for secret material.
 - Before finishing a task, run at least `cargo check` and report failures.
 - Keep `README.md` in sync with user-facing command changes and behaviors.
+- Update `CHANGELOG.md` for user-facing changes; list them under `[Unreleased]` in the appropriate section.
 - Avoid backward-compatibility defaults or legacy migrations unless explicitly requested.
