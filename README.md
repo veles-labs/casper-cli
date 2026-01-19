@@ -72,6 +72,13 @@ Creates a new wallet. BIP-39 is the default.
 casper-cli wallet create mywallet
 ```
 
+Derivation scheme (default is BIP-32 secp256k1):
+
+```bash
+casper-cli wallet create mywallet --bip32
+casper-cli wallet create mywallet --slip10
+```
+
 Seeded (deterministic) wallets:
 
 ```bash
@@ -94,6 +101,13 @@ Recovers a wallet from a BIP-39 mnemonic. This will prompt for the mnemonic and 
 
 ```bash
 casper-cli wallet recover mywallet
+```
+
+Derivation scheme (default is BIP-32 secp256k1):
+
+```bash
+casper-cli wallet recover mywallet --bip32
+casper-cli wallet recover mywallet --slip10
 ```
 
 ### wallet import-legacy
@@ -130,6 +144,11 @@ casper-cli wallet info mywallet
 
 Derives accounts from the wallet root and stores them in metadata. The command fails if the requested range overlaps existing accounts. Use `--name` with a `tinytemplate` template to control account names; the DeriveNameContext fields are `index` (0-based), `index1` (1-based), `wallet` (wallet name), `network` (active network key), and `chain_name` (active network chain name). The default is `account-{index}`.
 
+Default derivation paths:
+
+- BIP-32 secp256k1: `m/44'/506'/0'/0/{index}`
+- SLIP-0010 ed25519 (hardened only): `m/44'/506'/0'/0'/{index}'`
+
 ```bash
 casper-cli wallet derive mywallet --start 0 --count 3
 ```
@@ -143,7 +162,7 @@ casper-cli wallet derive devnet --start 0 --count 4 --name "validator-{index1}"
 casper-cli wallet derive devnet --start 100 --count 4 --name "user-{index1}"
 ```
 
-To show private keys (dangerous):
+To show private keys (dangerous, hex-encoded Casper secret key bytes with tag prefix):
 
 ```bash
 casper-cli wallet derive mywallet --show-private

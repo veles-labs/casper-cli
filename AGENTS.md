@@ -7,7 +7,7 @@
 - Use AEAD with unique nonces and bind context via AAD when encrypting secrets.
 - Fail closed on crypto errors; never ignore authentication/decryption failures.
 - Use atomic writes and restrictive file permissions (0600 files, 0700 dirs) for secret material.
-- Before finishing a task, run at least `cargo check` and report failures.
+- Before finishing a task, run `cargo clippy --all --all-targets --all-features --tests` and report failures.
 - Keep `README.md` in sync with user-facing command changes and behaviors.
 - Update `CHANGELOG.md` for user-facing changes; list them under `[Unreleased]` in the appropriate section.
 - Avoid backward-compatibility defaults or legacy migrations unless explicitly requested.

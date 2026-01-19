@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Added balance display for wallets.
 - Added support for importing legacy PEM secret keys as wallets.
+- Added SLIP-0010 ed25519 wallet derivation via `--slip10`.
 ### Changed
+- `wallet derive --show-private` now outputs hex-encoded Casper secret key bytes with tag prefix.
 ### Deprecated
 ### Removed
 ### Fixed
