@@ -9,6 +9,10 @@ This CLI provides wallet management for Casper: create/recover wallets, derive a
 - `cargo install casper-cli`
 - Or download a tarball from the [GitHub releases page](https://github.com/veles-labs/casper-cli/releases) and extract it into your `PATH`.
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
+
 ## Build and run
 
 ```bash
