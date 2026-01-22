@@ -3,10 +3,7 @@ use clap::Args;
 use comfy_table::{Cell, Table};
 use tokio::runtime::Runtime;
 
-use casper_types::{
-    PublicKey,
-    bytesrepr::ToBytes,
-};
+use casper_types::{PublicKey, bytesrepr::ToBytes};
 use veles_casper_rust_sdk::jsonrpc::CasperClient;
 
 use crate::network;

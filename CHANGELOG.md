@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 ### Changed
 - `config edit` now falls back to `vim`, then `nano` when `$EDITOR` is unset.
+- Default config now includes `mainnet` and `testnet` endpoints and defaults the active network to `testnet`.
 ### Deprecated
 ### Removed
 ### Fixed

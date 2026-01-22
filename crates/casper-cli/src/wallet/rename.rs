@@ -3,7 +3,7 @@ use clap::Args;
 
 use crate::storage::StorageConfig;
 
-use super::{WalletType, load_metadata, save_metadata, wallet_storage, ensure_wallet_exists};
+use super::{WalletType, ensure_wallet_exists, load_metadata, save_metadata, wallet_storage};
 
 #[derive(Args)]
 /// Arguments for renaming an account.

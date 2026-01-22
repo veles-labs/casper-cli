@@ -22,14 +22,14 @@ use zeroize::Zeroize;
 const WALLET_DIR_NAME: &str = "wallets";
 
 mod create;
-mod recover;
-mod import_legacy;
-mod list;
-mod info;
-mod derive;
-mod rename;
 mod delete;
+mod derive;
 mod external;
+mod import_legacy;
+mod info;
+mod list;
+mod recover;
+mod rename;
 
 fn parse_word_count(value: &str) -> std::result::Result<u16, String> {
     match value {
@@ -73,7 +73,6 @@ pub enum WalletCommand {
     #[command(external_subcommand)]
     External(Vec<String>),
 }
-
 
 #[derive(Serialize, Deserialize)]
 struct WalletMetadata {
@@ -278,7 +277,6 @@ fn secret_key_from_pem(pem: &str) -> Result<SecretKey> {
     }
     Ok(secret_key)
 }
-
 
 fn public_key_from_hex(input: &str) -> Result<PublicKey> {
     let bytes = hex::decode(input).context("invalid public key hex")?;

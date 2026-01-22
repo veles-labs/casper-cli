@@ -54,9 +54,7 @@ impl ResolvedAccount {
                 ..
             } => format!("{wallet_name}:{account_name}"),
             ResolvedAccount::LegacyWallet { wallet_name, .. } => wallet_name.clone(),
-            ResolvedAccount::AccountHash(_) | ResolvedAccount::PublicKey(_) => {
-                fallback.to_string()
-            }
+            ResolvedAccount::AccountHash(_) | ResolvedAccount::PublicKey(_) => fallback.to_string(),
         }
     }
 }
@@ -108,8 +106,8 @@ fn parse_public_key_hex(input: &str) -> Result<PublicKey> {
 mod tests {
     use super::{ResolvedAccount, parse_identifier, resolve};
     use anyhow::Result;
-    use casper_types::{PublicKey, SecretKey};
     use casper_types::bytesrepr::ToBytes;
+    use casper_types::{PublicKey, SecretKey};
     use serde_json::json;
     use std::fs;
     use std::path::{Path, PathBuf};

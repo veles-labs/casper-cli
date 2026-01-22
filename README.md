@@ -204,10 +204,10 @@ casper-cli wallet delete mywallet
 
 ## Network commands
 
-Networks are stored in `config.toml` under the same config directory as wallets. If the file is missing, `casper-cli` will prompt for the storage backend and then create it with a default `devnet` entry:
+Networks are stored in `config.toml` under the same config directory as wallets. If the file is missing, `casper-cli` will prompt for the storage backend and then create it with default `devnet`, `mainnet`, and `testnet` entries (defaulting the active network to `testnet`):
 
 ```toml
-active = "devnet"
+active = "testnet"
 
 [storage]
 type = "keyring"
@@ -218,13 +218,27 @@ type = "keyring"
 
 [networks.devnet]
 chain_name = "casper-dev"
-rest = "http://127.0.0.1:14102"
-sse = "http://127.0.0.1:18102/events"
-rpc = "http://127.0.0.1:11102/rpc"
+rest = "http://127.0.0.1:14101"
+sse = "http://127.0.0.1:18101/events"
+rpc = "http://127.0.0.1:11101/rpc"
 # binary_port supports address:port, tcp://address:port, ws://address[:port]/path, or wss://address[:port]/path.
 # ws defaults to port 80 and wss defaults to port 443 if omitted.
 # wss uses system trust roots and will fail on invalid certificates.
 binary_port = "127.0.0.1:28101"
+
+[networks.mainnet]
+chain_name = "casper"
+rest = "https://api.veleslabs.xyz/mainnet/"
+sse = "https://api.veleslabs.xyz/mainnet/events"
+rpc = "https://api.veleslabs.xyz/mainnet/rpc"
+binary_port = "wss://api.veleslabs.xyz/mainnet/binary"
+
+[networks.testnet]
+chain_name = "casper-test"
+rest = "https://api.veleslabs.xyz/testnet/"
+sse = "https://api.veleslabs.xyz/testnet/events"
+rpc = "https://api.veleslabs.xyz/testnet/rpc"
+binary_port = "wss://api.veleslabs.xyz/testnet/binary"
 ```
 
 ### network use
@@ -233,7 +247,9 @@ Selects the active network by key or chain name:
 
 ```bash
 casper-cli network use devnet
+casper-cli network use testnet
 casper-cli network use casper-dev
+casper-cli network use casper-test
 ```
 
 ### network list

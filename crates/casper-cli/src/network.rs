@@ -145,15 +145,24 @@ fn load_or_init_config_with_options(path: &Path, options: &ConfigInitOptions) ->
         println!("\nGenerated config.toml:\n{preview}");
         println!("Run `casper-cli config edit` to open an editor and you can modify it.");
         save_config(path, &config)?;
+        if let Some(active) = config.active.as_deref() {
+            println!("Active network: {active}");
+            println!("Switch networks with `casper-cli network use <name>`.");
+        }
         return Ok(config);
     }
     let data =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     let mut config: AppConfig =
         toml::from_str(&data).with_context(|| format!("failed to parse {}", path.display()))?;
-    if config.active.is_none() && config.networks.contains_key("devnet") {
-        config.active = Some("devnet".to_string());
-        save_config(path, &config)?;
+    if config.active.is_none() {
+        if config.networks.contains_key("testnet") {
+            config.active = Some("testnet".to_string());
+            save_config(path, &config)?;
+        } else if config.networks.contains_key("devnet") {
+            config.active = Some("devnet".to_string());
+            save_config(path, &config)?;
+        }
     }
     Ok(config)
 }
@@ -276,9 +285,29 @@ fn config_with_storage(storage: StorageSection) -> AppConfig {
             binary_port: "127.0.0.1:28101".to_string(),
         },
     );
+    networks.insert(
+        "mainnet".to_string(),
+        NetworkEntry {
+            chain_name: "casper".to_string(),
+            rest: "https://api.veleslabs.xyz/mainnet/".to_string(),
+            sse: "https://api.veleslabs.xyz/mainnet/events".to_string(),
+            rpc: "https://api.veleslabs.xyz/mainnet/rpc".to_string(),
+            binary_port: "wss://api.veleslabs.xyz/mainnet/binary".to_string(),
+        },
+    );
+    networks.insert(
+        "testnet".to_string(),
+        NetworkEntry {
+            chain_name: "casper-test".to_string(),
+            rest: "https://api.veleslabs.xyz/testnet/".to_string(),
+            sse: "https://api.veleslabs.xyz/testnet/events".to_string(),
+            rpc: "https://api.veleslabs.xyz/testnet/rpc".to_string(),
+            binary_port: "wss://api.veleslabs.xyz/testnet/binary".to_string(),
+        },
+    );
 
     AppConfig {
-        active: Some("devnet".to_string()),
+        active: Some("testnet".to_string()),
         networks,
         storage: Some(storage),
     }

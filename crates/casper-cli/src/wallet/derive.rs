@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow, bail};
 use bip32::{DerivationPath, XPrv};
-use casper_types::{ED25519_TAG, PublicKey, SECP256K1_TAG, SecretKey};
 use casper_types::bytesrepr::ToBytes;
+use casper_types::{ED25519_TAG, PublicKey, SECP256K1_TAG, SecretKey};
 use clap::Args;
 use comfy_table::{Cell, Table};
 use std::collections::HashSet;

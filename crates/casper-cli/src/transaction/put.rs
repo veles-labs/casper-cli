@@ -13,8 +13,7 @@ use crate::storage::StorageConfig;
 use crate::utils;
 
 use super::{
-    DEFAULT_GAS_PRICE_TOLERANCE, parse_runtime_args, resolve_from_secret_key,
-    simulate_transaction,
+    DEFAULT_GAS_PRICE_TOLERANCE, parse_runtime_args, resolve_from_secret_key, simulate_transaction,
 };
 
 #[derive(Args)]

@@ -14,8 +14,8 @@ use tokio::runtime::Runtime;
 use veles_casper_rust_sdk::jsonrpc::CasperClient;
 
 use crate::arguments::parse_argument;
-use crate::contract_runtime::store::SledStore;
 use crate::contract_runtime::ContractRuntime;
+use crate::contract_runtime::store::SledStore;
 use crate::storage::StorageConfig;
 use crate::wallet;
 use crate::{cl_type, cl_value};
