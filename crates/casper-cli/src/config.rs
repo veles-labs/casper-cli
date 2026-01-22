@@ -13,7 +13,7 @@ pub struct ConfigArgs {
 #[derive(Subcommand)]
 /// Config subcommands.
 pub enum ConfigCommand {
-    /// Open config.toml in $EDITOR.
+    /// Open config.toml in $EDITOR (fallback to vim, then nano).
     Edit,
 }
 

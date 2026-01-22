@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 ### Changed
+- `config edit` now falls back to `vim`, then `nano` when `$EDITOR` is unset.
 ### Deprecated
 ### Removed
 ### Fixed

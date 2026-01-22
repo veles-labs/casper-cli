@@ -270,7 +270,7 @@ casper-cli account view <account-hash-hex>
 
 ### config edit
 
-Opens `config.toml` in your `$EDITOR`:
+Opens `config.toml` in your `$EDITOR` (falls back to `vim`, then `nano` when `$EDITOR` is unset):
 
 ```bash
 casper-cli config edit
