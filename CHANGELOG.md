@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 ### Changed
+### Deprecated
+### Removed
+### Fixed
+### Security
+
+## [0.4.0] - 2026-01-22
+### Added
+### Changed
 - `config edit` now falls back to `vim`, then `nano` when `$EDITOR` is unset.
 - Default config now includes `mainnet` and `testnet` endpoints and defaults the active network to `testnet`.
 ### Deprecated
@@ -36,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial release.
 
-[Unreleased]: https://github.com/veles-labs/casper-cli/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/veles-labs/casper-cli/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/veles-labs/casper-cli/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/veles-labs/casper-cli/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/veles-labs/casper-cli/releases/tag/v0.2.1
