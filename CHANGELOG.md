@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- `tx transfer --to` now accepts `0x`-prefixed 20-byte EVM addresses, including valid EIP-55 mixed-case checksums.
 ### Changed
 ### Deprecated
 ### Removed

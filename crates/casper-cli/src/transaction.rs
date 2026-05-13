@@ -4,10 +4,12 @@ use casper_types::account::AccountHash;
 use casper_types::bytesrepr::deserialize_from_slice;
 use casper_types::contracts::ContractHash;
 use casper_types::{
-    AddressableEntityHash, CLType, DeployHash, Digest, PackageHash, PublicKey, RuntimeArgs,
-    SecretKey, Transaction, TransactionHash, TransactionV1Hash, TransferTarget, URef,
+    AddressableEntityHash, CLType, CLValue, DeployHash, Digest, PackageHash, PublicKey,
+    RuntimeArgs, SecretKey, Transaction, TransactionHash, TransactionV1Hash, TransferTarget, U512,
+    URef,
 };
 use clap::{Args, Subcommand};
+use sha3::{Digest as _, Keccak256};
 use std::fs;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
@@ -27,6 +29,20 @@ mod put;
 mod transfer;
 
 const DEFAULT_GAS_PRICE_TOLERANCE: u8 = 1;
+const EVM_ADDRESS_LEN: usize = 20;
+const EVM_ADDRESS_HEX_LEN: usize = EVM_ADDRESS_LEN * 2;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ResolvedTransferTarget {
+    Native(TransferTarget),
+    EvmAddress([u8; EVM_ADDRESS_LEN]),
+}
+
+impl ResolvedTransferTarget {
+    fn is_evm_address(&self) -> bool {
+        matches!(self, ResolvedTransferTarget::EvmAddress(_))
+    }
+}
 
 #[derive(Args)]
 /// Transaction submission commands.
@@ -199,7 +215,7 @@ fn simulate_transaction(
     Ok(())
 }
 
-fn resolve_transfer_target(storage: &StorageConfig, value: &str) -> Result<TransferTarget> {
+fn resolve_transfer_target(storage: &StorageConfig, value: &str) -> Result<ResolvedTransferTarget> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         bail!("--to cannot be empty");
@@ -218,23 +234,109 @@ fn resolve_transfer_target(storage: &StorageConfig, value: &str) -> Result<Trans
     parse_transfer_target(trimmed)
 }
 
-fn parse_transfer_target(value: &str) -> Result<TransferTarget> {
+fn parse_transfer_target(value: &str) -> Result<ResolvedTransferTarget> {
     const ACCOUNT_HASH_LEN: usize = 32;
     if let Ok(account_hash) = AccountHash::from_formatted_str(value) {
-        return Ok(TransferTarget::AccountHash(account_hash));
+        return Ok(ResolvedTransferTarget::Native(TransferTarget::AccountHash(
+            account_hash,
+        )));
     }
     if let Ok(uref) = URef::from_formatted_str(value) {
-        return Ok(TransferTarget::URef(uref));
+        return Ok(ResolvedTransferTarget::Native(TransferTarget::URef(uref)));
     }
-    let bytes = hex::decode(value).context("invalid transfer target hex")?;
+    if let Some(address) = parse_evm_address(value)? {
+        return Ok(ResolvedTransferTarget::EvmAddress(address));
+    }
+    let hex = strip_hex_prefix(value);
+    let bytes = hex::decode(hex).context("invalid transfer target hex")?;
     if bytes.len() == ACCOUNT_HASH_LEN {
         let mut hash = [0u8; ACCOUNT_HASH_LEN];
         hash.copy_from_slice(&bytes);
-        return Ok(TransferTarget::AccountHash(AccountHash::new(hash)));
+        return Ok(ResolvedTransferTarget::Native(TransferTarget::AccountHash(
+            AccountHash::new(hash),
+        )));
     }
-    let public_key: PublicKey =
-        deserialize_from_slice(&bytes).map_err(|_| anyhow!("invalid public key bytes"))?;
-    Ok(TransferTarget::PublicKey(public_key))
+    let public_key: PublicKey = deserialize_from_slice(&bytes).map_err(|_| {
+        anyhow!(
+            "transfer target must be a wallet reference, legacy wallet name, 0x-prefixed 20-byte EVM address, 32-byte account hash, formatted URef, or public key bytes"
+        )
+    })?;
+    Ok(ResolvedTransferTarget::Native(TransferTarget::PublicKey(
+        public_key,
+    )))
+}
+
+fn evm_transfer_runtime_args(amount: U512, address: [u8; EVM_ADDRESS_LEN]) -> Result<RuntimeArgs> {
+    let mut runtime_args = RuntimeArgs::new();
+    runtime_args.insert_cl_value(
+        "target",
+        CLValue::from_components(CLType::ByteArray(EVM_ADDRESS_LEN as u32), address.to_vec()),
+    );
+    runtime_args
+        .insert("amount", amount)
+        .map_err(|err| anyhow!("failed to encode transfer amount: {err:?}"))?;
+    Ok(runtime_args)
+}
+
+fn strip_hex_prefix(value: &str) -> &str {
+    value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .unwrap_or(value)
+}
+
+fn strip_evm_hex_prefix(value: &str) -> Option<&str> {
+    value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+}
+
+fn parse_evm_address(value: &str) -> Result<Option<[u8; EVM_ADDRESS_LEN]>> {
+    let trimmed = value.trim();
+    let Some(hex) = strip_evm_hex_prefix(trimmed) else {
+        if trimmed.len() == EVM_ADDRESS_HEX_LEN
+            && trimmed.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            bail!("EVM address recipients must include a 0x prefix");
+        }
+        return Ok(None);
+    };
+    if hex.len() != EVM_ADDRESS_HEX_LEN {
+        return Ok(None);
+    }
+    if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("invalid EVM address hex");
+    }
+    if has_mixed_hex_case(hex) && !has_valid_eip55_checksum(hex) {
+        bail!("invalid EIP-55 checksum for EVM address");
+    }
+    let bytes = hex::decode(hex).context("invalid EVM address hex")?;
+    let mut address = [0u8; EVM_ADDRESS_LEN];
+    address.copy_from_slice(&bytes);
+    Ok(Some(address))
+}
+
+fn has_mixed_hex_case(value: &str) -> bool {
+    let has_lower = value.bytes().any(|byte| byte.is_ascii_lowercase());
+    let has_upper = value.bytes().any(|byte| byte.is_ascii_uppercase());
+    has_lower && has_upper
+}
+
+fn has_valid_eip55_checksum(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    let hash = Keccak256::digest(lower.as_bytes());
+    value.bytes().enumerate().all(|(index, byte)| {
+        if !byte.is_ascii_alphabetic() {
+            return true;
+        }
+        let hash_byte = hash[index / 2];
+        let hash_nibble = if index % 2 == 0 {
+            hash_byte >> 4
+        } else {
+            hash_byte & 0x0f
+        };
+        byte.is_ascii_uppercase() == (hash_nibble >= 8)
+    })
 }
 
 fn parse_contract_hash(value: &str) -> Result<AddressableEntityHash> {
@@ -300,14 +402,15 @@ fn looks_like_package_hash(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_contract_hash, parse_package_hash, parse_transaction_hash, parse_transfer_target,
+        ResolvedTransferTarget, evm_transfer_runtime_args, parse_contract_hash, parse_package_hash,
+        parse_transaction_hash, parse_transfer_target,
     };
     use casper_types::bytesrepr::ToBytes;
     use casper_types::contracts::ContractHash;
     use casper_types::crypto::AsymmetricType;
     use casper_types::{
-        AccessRights, AddressableEntityHash, DeployHash, Digest, PackageHash, PublicKey,
-        TransactionHash, TransactionV1Hash, TransferTarget, URef, account::AccountHash,
+        AccessRights, AddressableEntityHash, CLType, DeployHash, Digest, PackageHash, PublicKey,
+        TransactionHash, TransactionV1Hash, TransferTarget, U512, URef, account::AccountHash,
     };
 
     fn sample_digest_hex() -> String {
@@ -400,7 +503,10 @@ mod tests {
         let bytes = public_key.to_bytes().expect("bytes");
         let hex = hex::encode(bytes);
         let parsed = parse_transfer_target(&hex).expect("target");
-        assert_eq!(parsed, TransferTarget::PublicKey(public_key));
+        assert_eq!(
+            parsed,
+            ResolvedTransferTarget::Native(TransferTarget::PublicKey(public_key))
+        );
     }
 
     #[test]
@@ -408,7 +514,21 @@ mod tests {
         let account_hash = AccountHash::new([2u8; 32]);
         let hex = hex::encode(account_hash.as_ref());
         let parsed = parse_transfer_target(&hex).expect("target");
-        assert_eq!(parsed, TransferTarget::AccountHash(account_hash));
+        assert_eq!(
+            parsed,
+            ResolvedTransferTarget::Native(TransferTarget::AccountHash(account_hash))
+        );
+    }
+
+    #[test]
+    fn parses_transfer_target_account_hash_bytes_with_0x_prefix() {
+        let account_hash = AccountHash::new([2u8; 32]);
+        let hex = format!("0x{}", hex::encode(account_hash.as_ref()));
+        let parsed = parse_transfer_target(&hex).expect("target");
+        assert_eq!(
+            parsed,
+            ResolvedTransferTarget::Native(TransferTarget::AccountHash(account_hash))
+        );
     }
 
     #[test]
@@ -416,6 +536,77 @@ mod tests {
         let uref = URef::new([3u8; 32], AccessRights::READ_ADD_WRITE);
         let formatted = uref.to_formatted_string();
         let parsed = parse_transfer_target(&formatted).expect("target");
-        assert_eq!(parsed, TransferTarget::URef(uref));
+        assert_eq!(
+            parsed,
+            ResolvedTransferTarget::Native(TransferTarget::URef(uref))
+        );
+    }
+
+    #[test]
+    fn rejects_transfer_target_evm_address_without_prefix() {
+        let err = parse_transfer_target("de709f2102306220921060314715629080e2fb77")
+            .expect_err("unprefixed EVM address should fail");
+        let message = format!("{err}");
+        assert!(message.contains("must include a 0x prefix"));
+    }
+
+    #[test]
+    fn parses_transfer_target_evm_address_with_prefix() {
+        let parsed =
+            parse_transfer_target("0xde709f2102306220921060314715629080e2fb77").expect("target");
+        assert!(matches!(parsed, ResolvedTransferTarget::EvmAddress(_)));
+    }
+
+    #[test]
+    fn parses_transfer_target_evm_address_with_eip55_checksum() {
+        let parsed =
+            parse_transfer_target("0x52908400098527886E0F7030069857D2E4169EE7").expect("target");
+        assert_eq!(
+            parsed,
+            ResolvedTransferTarget::EvmAddress([
+                0x52, 0x90, 0x84, 0x00, 0x09, 0x85, 0x27, 0x88, 0x6e, 0x0f, 0x70, 0x30, 0x06, 0x98,
+                0x57, 0xd2, 0xe4, 0x16, 0x9e, 0xe7,
+            ])
+        );
+    }
+
+    #[test]
+    fn rejects_transfer_target_evm_address_with_invalid_eip55_checksum() {
+        let err = parse_transfer_target("0x52908400098527886E0F7030069857D2E4169Ee7")
+            .expect_err("invalid checksum should fail");
+        let message = format!("{err}");
+        assert!(message.contains("invalid EIP-55 checksum"));
+    }
+
+    #[test]
+    fn rejects_malformed_evm_sized_transfer_target_hex() {
+        let err = parse_transfer_target("0xde709f2102306220921060314715629080e2fb7z")
+            .expect_err("invalid hex should fail");
+        let message = format!("{err}");
+        assert!(message.contains("invalid EVM address hex"));
+    }
+
+    #[test]
+    fn rejects_short_or_long_transfer_target_hex() {
+        let short = parse_transfer_target("0x1234").expect_err("short target should fail");
+        let short_message = format!("{short}");
+        assert!(short_message.contains("transfer target must be"));
+
+        let long = parse_transfer_target(&format!("0x{}", "11".repeat(21)))
+            .expect_err("long target should fail");
+        let long_message = format!("{long}");
+        assert!(long_message.contains("transfer target must be"));
+    }
+
+    #[test]
+    fn evm_transfer_runtime_args_use_byte_array_20_target() {
+        let address = [0x11; 20];
+        let args = evm_transfer_runtime_args(U512::from(1u64), address).expect("runtime args");
+        let target = args.get("target").expect("target arg");
+        assert_eq!(target.cl_type(), &CLType::ByteArray(20));
+        assert_eq!(target.inner_bytes(), &address.to_vec());
+
+        let amount = args.get("amount").expect("amount arg");
+        assert_eq!(amount.cl_type(), &CLType::U512);
     }
 }

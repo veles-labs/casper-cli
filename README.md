@@ -369,12 +369,13 @@ casper-cli tx get deploy-hash-<hex> --raw
 
 ### transaction transfer
 
-Transfers CSPR from a wallet account to a target account. The recipient can be a wallet/account reference, public key bytes hex, or account hash bytes hex. You can set `--gas-price-tolerance` (default: 1). Use `--simulate` to run a local execution engine via the binary port without submitting the transaction, or `--raw` to print only the transaction hash.
+Transfers CSPR from a wallet account to a target account. The recipient can be a wallet/account reference, public key bytes hex, account hash bytes hex, or a 20-byte EVM address with a `0x` prefix. Mixed-case EVM addresses must pass the Ethereum EIP-55 checksum; all-lowercase and all-uppercase EVM addresses are accepted without checksum validation. You can set `--gas-price-tolerance` (default: 1). Use `--simulate` to run a local execution engine via the binary port without submitting the transaction, or `--raw` to print only the transaction hash. Simulation is not supported for EVM address recipients.
 
 ```bash
 casper-cli tx transfer --from mywallet:account-0 --to mywallet:account-1 --amount 1.25
 casper-cli tx transfer --from mywallet:account-0 --to <public-key-hex> --amount 10
 casper-cli tx transfer --from mywallet:account-0 --to <account-hash-hex> --amount 0.5 --gas-price-tolerance 2
+casper-cli tx transfer --from mywallet:account-0 --to 0xde709f2102306220921060314715629080e2fb77 --amount 0.5
 casper-cli tx transfer --from mywallet:account-0 --to mywallet:account-1 --amount 1.25 --simulate
 casper-cli tx transfer --from mywallet:account-0 --to mywallet:account-1 --amount 1.25 --raw
 ```

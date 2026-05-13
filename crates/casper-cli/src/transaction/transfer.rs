@@ -1,5 +1,5 @@
-use anyhow::{Context, Result, anyhow};
-use casper_types::{PricingMode, Transaction};
+use anyhow::{Context, Result, anyhow, bail};
+use casper_types::{PricingMode, Transaction, account::AccountHash};
 use clap::Args;
 use tokio::runtime::Runtime;
 use veles_casper_rust_sdk::TransactionV1Builder;
@@ -10,8 +10,8 @@ use crate::storage::StorageConfig;
 use crate::utils;
 
 use super::{
-    DEFAULT_GAS_PRICE_TOLERANCE, resolve_from_secret_key, resolve_transfer_target,
-    simulate_transaction,
+    DEFAULT_GAS_PRICE_TOLERANCE, ResolvedTransferTarget, evm_transfer_runtime_args,
+    resolve_from_secret_key, resolve_transfer_target, simulate_transaction,
 };
 
 #[derive(Args)]
@@ -20,7 +20,7 @@ pub struct TransferArgs {
     /// Wallet/account reference (<wallet>:<account>) or legacy wallet name.
     #[arg(long)]
     from: String,
-    /// Recipient wallet/account, legacy wallet name, public key bytes hex, or account hash bytes hex.
+    /// Recipient wallet/account, legacy wallet name, 0x-prefixed EVM address, public key bytes hex, or account hash bytes hex.
     #[arg(long)]
     to: String,
     /// Amount in CSPR.
@@ -44,6 +44,9 @@ pub fn handle(
 ) -> Result<()> {
     let amount = utils::parse_cspr_to_motes("transfer amount", &args.amount)?;
     let target = resolve_transfer_target(storage, &args.to)?;
+    if args.simulate && target.is_evm_address() {
+        bail!("simulation is not supported for native transfers to EVM addresses");
+    }
     let secret_key = resolve_from_secret_key(storage, &args.from)?;
     let chain_name = network::active_network_chain_name(context)?;
     let (network_name, rpc_endpoint) = network::active_network_rpc(context)?;
@@ -53,11 +56,21 @@ pub fn handle(
         gas_price_tolerance: args.gas_price_tolerance,
         standard_payment: true,
     };
-    let builder = TransactionV1Builder::new_transfer(amount, None, target, None)
-        .map_err(|err| anyhow!(err.to_string()))?
-        .with_pricing_mode(pricing_mode)
-        .with_chain_name(chain_name)
-        .with_secret_key(&secret_key);
+    let builder = match target {
+        ResolvedTransferTarget::Native(target) => {
+            TransactionV1Builder::new_transfer(amount, None, target, None)
+                .map_err(|err| anyhow!(err.to_string()))?
+        }
+        ResolvedTransferTarget::EvmAddress(address) => {
+            let runtime_args = evm_transfer_runtime_args(amount, address)?;
+            TransactionV1Builder::new_transfer(amount, None, AccountHash::new([0u8; 32]), None)
+                .map_err(|err| anyhow!(err.to_string()))?
+                .with_runtime_args(runtime_args)
+        }
+    }
+    .with_pricing_mode(pricing_mode)
+    .with_chain_name(chain_name)
+    .with_secret_key(&secret_key);
 
     let tx = builder.build()?;
     let transaction = Transaction::V1(tx);
