@@ -180,6 +180,28 @@ To show private keys (dangerous, hex-encoded Casper secret key bytes with tag pr
 casper-cli wallet derive mywallet --show-private
 ```
 
+### wallet derive-vanity
+
+Scans derivation paths in parallel until derived accounts match vanity filters, then stores the matching accounts in metadata. At least one of `--starts-with`, `--ends-with`, or `--regex` is required. Multiple filters are combined with AND.
+
+By default, matching is applied to the lowercase 64-character account hash hex. Use `--target public-key` to match the lowercase Casper public key hex, including its key-type tag. `--starts-with` and `--ends-with` are lowercased before matching; `--regex` is applied to the normalized target string.
+
+The command searches from `--start 0`, saves `--count 1` match, uses the available CPU parallelism, and stops after `--max-attempts 1000000` candidate derivations unless `--unbounded` is supplied. Existing account paths are skipped and do not count against `--max-attempts`.
+
+```bash
+casper-cli wallet derive-vanity mywallet --starts-with dead
+casper-cli wallet derive-vanity mywallet --ends-with cafe --count 2 --jobs 8
+casper-cli wallet derive-vanity mywallet --target public-key --regex '^02ab'
+```
+
+Name templates use the same fields as `wallet derive`; for vanity matches, `counter` and `counter1` are the match ordinal, not the derivation index offset. The default name is `vanity-{index}`.
+
+To show private keys for found matches (dangerous, hex-encoded Casper secret key bytes with tag prefix):
+
+```bash
+casper-cli wallet derive-vanity mywallet --starts-with dead --show-private
+```
+
 ### wallet rename-account
 
 Renames an existing account in a wallet.
@@ -330,7 +352,7 @@ Cleaned up 2 unreferenced tries
 
 ### transaction put
 
-Builds a session transaction from Wasm and submits it to the active network. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. Use `--simulate` to run a local execution engine via the binary port without submitting the transaction. You can also use `tx` as an alias.
+Builds a session transaction from Wasm and submits it to the active network. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. Transactions are signed by the `--from` key and use that key's account hash as the `initiator_addr`. Use `--simulate` to run a local execution engine via the binary port without submitting the transaction. You can also use `tx` as an alias.
 
 ```bash
 casper-cli transaction put path/to/contract.wasm --payment-amount 2.5 --from mywallet:account-0
@@ -343,7 +365,7 @@ casper-cli transaction put path/to/contract.wasm --from mywallet:account-0 --raw
 
 ### transaction call
 
-Calls a stored contract by hash (formatted `contract-`/`addressable-entity-` or raw hex) using the `call` entry point. To call by name, pass the named key alias directly. Use `--package` to interpret the target as a package hash (latest version by default) and `--version` with `--package` to select a specific package version. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. Use `--simulate` to run a local execution engine via the binary port without submitting the transaction.
+Calls a stored contract by hash (formatted `contract-`/`addressable-entity-` or raw hex) using the `call` entry point. To call by name, pass the named key alias directly. Use `--package` to interpret the target as a package hash (latest version by default) and `--version` with `--package` to select a specific package version. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. Transactions are signed by the `--from` key and use that key's account hash as the `initiator_addr`. Use `--simulate` to run a local execution engine via the binary port without submitting the transaction.
 
 ```bash
 casper-cli transaction call contract-... entry_point --from mywallet:account-0
@@ -369,7 +391,7 @@ casper-cli tx get deploy-hash-<hex> --raw
 
 ### transaction transfer
 
-Transfers CSPR from a wallet account to a target account. The recipient can be a wallet/account reference, public key bytes hex, or account hash bytes hex. You can set `--gas-price-tolerance` (default: 1). Use `--simulate` to run a local execution engine via the binary port without submitting the transaction, or `--raw` to print only the transaction hash.
+Transfers CSPR from a wallet account to a target account. Transactions are signed by the `--from` key and use that key's account hash as the `initiator_addr`. The recipient can be a wallet/account reference, public key bytes hex, or account hash bytes hex. You can set `--gas-price-tolerance` (default: 1). Use `--simulate` to run a local execution engine via the binary port without submitting the transaction, or `--raw` to print only the transaction hash.
 
 ```bash
 casper-cli tx transfer --from mywallet:account-0 --to mywallet:account-1 --amount 1.25

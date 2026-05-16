@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- Added `wallet derive-vanity` for parallel vanity account derivation scans.
 ### Changed
+- Transaction submission now uses the `--from` key's account hash as the default `initiator_addr`
+  for transfers and Wasm/contract calls.
 ### Deprecated
 ### Removed
 ### Fixed

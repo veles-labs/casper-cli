@@ -4,12 +4,12 @@ use crate::secure_storage::{RootSecret, SecureStorage, StorageBackendKind};
 use crate::slip0010;
 use crate::storage::StorageConfig;
 use anyhow::{Context, Result, anyhow, bail};
-use bip32::{DerivationPath, XPrv};
+use bip32::{ChildNumber, DerivationPath, XPrv};
 use bip39::{Language, Mnemonic};
 use blake2::Blake2bVar;
 use blake2::digest::{Update, VariableOutput};
 use casper_types::{
-    PublicKey, SecretKey,
+    ED25519_TAG, PublicKey, SECP256K1_TAG, SecretKey,
     bytesrepr::{ToBytes, deserialize_from_slice},
 };
 use clap::{Args, Subcommand};
@@ -20,10 +20,12 @@ use std::path::{Path, PathBuf};
 use zeroize::Zeroize;
 
 const WALLET_DIR_NAME: &str = "wallets";
+const DEFAULT_BIP32_SECP256K1_PATH_PREFIX: &str = "m/44'/506'/0'/0";
 
 mod create;
 mod delete;
 mod derive;
+mod derive_vanity;
 mod external;
 mod import_legacy;
 mod info;
@@ -65,6 +67,9 @@ pub enum WalletCommand {
     Info(info::InfoArgs),
     /// Derive one or more accounts from the wallet root.
     Derive(derive::DeriveArgs),
+    /// Search derivation paths for vanity accounts.
+    #[command(name = "derive-vanity")]
+    DeriveVanity(derive_vanity::DeriveVanityArgs),
     /// Rename an account inside a wallet.
     #[command(name = "rename-account")]
     RenameAccount(rename::RenameArgs),
@@ -111,6 +116,70 @@ struct DerivedAccount {
     public_key: String,
 }
 
+struct DerivedAccountCandidate {
+    index: u32,
+    path: String,
+    public_key_hex: String,
+    account_hash_hex: String,
+}
+
+enum AccountDeriver<'a> {
+    Bip32Secp256k1 { parent: XPrv },
+    Slip10Ed25519 { seed: &'a [u8], prefix: Vec<u32> },
+}
+
+impl<'a> AccountDeriver<'a> {
+    fn new(seed: &'a [u8], derivation: DerivationScheme) -> Result<Self> {
+        match derivation {
+            DerivationScheme::Bip32Secp256k1 => {
+                let parent_path = DEFAULT_BIP32_SECP256K1_PATH_PREFIX.parse::<DerivationPath>()?;
+                let parent = XPrv::derive_from_path(seed, &parent_path)?;
+                Ok(Self::Bip32Secp256k1 { parent })
+            }
+            DerivationScheme::Slip10Ed25519 => {
+                let prefix =
+                    slip0010::parse_hardened_path(slip0010::DEFAULT_SLIP0010_ED25519_PATH_PREFIX)?;
+                Ok(Self::Slip10Ed25519 { seed, prefix })
+            }
+        }
+    }
+
+    fn path_for_index(&self, index: u32) -> Result<String> {
+        match self {
+            Self::Bip32Secp256k1 { .. } => {
+                ChildNumber::new(index, false)?;
+                Ok(format!("{}/{}", DEFAULT_BIP32_SECP256K1_PATH_PREFIX, index))
+            }
+            Self::Slip10Ed25519 { .. } => Ok(slip0010::default_path(index)),
+        }
+    }
+
+    fn derive_candidate(&self, index: u32, path: String) -> Result<DerivedAccountCandidate> {
+        let secret_key = self.derive_secret_key(index)?;
+        candidate_from_secret_key(index, path, &secret_key)
+    }
+
+    fn derive_secret_key(&self, index: u32) -> Result<SecretKey> {
+        match self {
+            Self::Bip32Secp256k1 { parent } => {
+                let child_number = ChildNumber::new(index, false)?;
+                let child = parent.derive_child(child_number)?;
+                secret_key_from_bip32_xprv(&child)
+            }
+            Self::Slip10Ed25519 { seed, prefix } => {
+                let mut indexes = Vec::with_capacity(prefix.len() + 1);
+                indexes.extend_from_slice(prefix);
+                indexes.push(index);
+                let mut secret_key_bytes = slip0010::derive_private_key(seed, &indexes)?;
+                let secret_key = SecretKey::ed25519_from_bytes(secret_key_bytes)
+                    .map_err(|err| anyhow!(err.to_string()))?;
+                secret_key_bytes.zeroize();
+                Ok(secret_key)
+            }
+        }
+    }
+}
+
 pub fn handle(storage: &StorageConfig, context: &ConfigContext, args: WalletArgs) -> Result<()> {
     match args.command {
         WalletCommand::Create(command) => create::handle(storage, command),
@@ -119,6 +188,7 @@ pub fn handle(storage: &StorageConfig, context: &ConfigContext, args: WalletArgs
         WalletCommand::List => list::handle(storage),
         WalletCommand::Info(command) => info::handle(storage, context, command),
         WalletCommand::Derive(command) => derive::handle(storage, context, command),
+        WalletCommand::DeriveVanity(command) => derive_vanity::handle(storage, context, command),
         WalletCommand::RenameAccount(command) => rename::handle(storage, command),
         WalletCommand::Delete(command) => delete::handle(storage, command),
         WalletCommand::External(command) => external::handle(storage, command),
@@ -177,27 +247,7 @@ pub fn resolve_account_secret_key(
         .load(wallet_name)
         .map_err(|err| anyhow!(err.to_string()))?;
     let mut seed = root_seed(&root_secret)?;
-    let result = (|| -> Result<SecretKey> {
-        match metadata.derivation {
-            DerivationScheme::Bip32Secp256k1 => {
-                let derivation_path = account.path.parse::<DerivationPath>()?;
-                let xprv = XPrv::derive_from_path(&seed, &derivation_path)?;
-                let mut secret_key_bytes = xprv.to_bytes();
-                let secret_key = SecretKey::secp256k1_from_bytes(secret_key_bytes)
-                    .map_err(|err| anyhow!(err.to_string()))?;
-                secret_key_bytes.zeroize();
-                Ok(secret_key)
-            }
-            DerivationScheme::Slip10Ed25519 => {
-                let indexes = slip0010::parse_hardened_path(&account.path)?;
-                let mut secret_key_bytes = slip0010::derive_private_key(&seed, &indexes)?;
-                let secret_key = SecretKey::ed25519_from_bytes(secret_key_bytes)
-                    .map_err(|err| anyhow!(err.to_string()))?;
-                secret_key_bytes.zeroize();
-                Ok(secret_key)
-            }
-        }
-    })();
+    let result = derive_secret_key_for_path(&seed, metadata.derivation, &account.path);
     seed.zeroize();
     result
 }
@@ -283,6 +333,110 @@ fn public_key_from_hex(input: &str) -> Result<PublicKey> {
     let public_key: PublicKey =
         deserialize_from_slice(&bytes).map_err(|_| anyhow!("invalid public key bytes"))?;
     Ok(public_key)
+}
+
+fn derivation_index_limit(derivation: DerivationScheme) -> u64 {
+    match derivation {
+        DerivationScheme::Bip32Secp256k1 => ChildNumber::HARDENED_FLAG as u64,
+        DerivationScheme::Slip10Ed25519 => u64::from(u32::MAX) + 1,
+    }
+}
+
+fn derivation_path_for_index(derivation: DerivationScheme, index: u32) -> Result<String> {
+    match derivation {
+        DerivationScheme::Bip32Secp256k1 => {
+            ChildNumber::new(index, false)?;
+            Ok(format!("{}/{}", DEFAULT_BIP32_SECP256K1_PATH_PREFIX, index))
+        }
+        DerivationScheme::Slip10Ed25519 => Ok(slip0010::default_path(index)),
+    }
+}
+
+fn derive_account_candidate(
+    seed: &[u8],
+    derivation: DerivationScheme,
+    index: u32,
+) -> Result<DerivedAccountCandidate> {
+    let path = derivation_path_for_index(derivation, index)?;
+    let secret_key = derive_secret_key_for_path(seed, derivation, &path)?;
+    candidate_from_secret_key(index, path, &secret_key)
+}
+
+fn candidate_from_secret_key(
+    index: u32,
+    path: String,
+    secret_key: &SecretKey,
+) -> Result<DerivedAccountCandidate> {
+    let public_key = PublicKey::from(secret_key);
+    let public_key_hex = public_key_hex(&public_key)?;
+    let account_hash_hex = format!("{}", public_key.to_account_hash());
+    Ok(DerivedAccountCandidate {
+        index,
+        path,
+        public_key_hex,
+        account_hash_hex,
+    })
+}
+
+fn secret_key_from_bip32_xprv(xprv: &XPrv) -> Result<SecretKey> {
+    let mut secret_key_bytes = xprv.to_bytes();
+    let secret_key = SecretKey::secp256k1_from_bytes(secret_key_bytes)
+        .map_err(|err| anyhow!(err.to_string()))?;
+    secret_key_bytes.zeroize();
+    Ok(secret_key)
+}
+
+fn derive_secret_key_for_path(
+    seed: &[u8],
+    derivation: DerivationScheme,
+    path: &str,
+) -> Result<SecretKey> {
+    match derivation {
+        DerivationScheme::Bip32Secp256k1 => {
+            let derivation_path = path.parse::<DerivationPath>()?;
+            let xprv = XPrv::derive_from_path(seed, &derivation_path)?;
+            secret_key_from_bip32_xprv(&xprv)
+        }
+        DerivationScheme::Slip10Ed25519 => {
+            let indexes = slip0010::parse_hardened_path(path)?;
+            let mut secret_key_bytes = slip0010::derive_private_key(seed, &indexes)?;
+            let secret_key = SecretKey::ed25519_from_bytes(secret_key_bytes)
+                .map_err(|err| anyhow!(err.to_string()))?;
+            secret_key_bytes.zeroize();
+            Ok(secret_key)
+        }
+    }
+}
+
+fn secret_key_bytes(secret_key: &SecretKey) -> Result<Vec<u8>> {
+    match secret_key {
+        SecretKey::System => bail!("secret key cannot be system key"),
+        SecretKey::Ed25519(key) => {
+            let mut bytes = Vec::with_capacity(1 + SecretKey::ED25519_LENGTH);
+            bytes.push(ED25519_TAG);
+            bytes.extend_from_slice(&key.to_bytes());
+            Ok(bytes)
+        }
+        SecretKey::Secp256k1(key) => {
+            let raw_bytes = key.to_bytes();
+            let raw_bytes: &[u8] = raw_bytes.as_ref();
+            let mut bytes = Vec::with_capacity(1 + raw_bytes.len());
+            bytes.push(SECP256K1_TAG);
+            bytes.extend_from_slice(raw_bytes);
+            Ok(bytes)
+        }
+        _ => bail!("unsupported secret key variant"),
+    }
+}
+
+fn public_key_hex(public_key: &PublicKey) -> Result<String> {
+    if matches!(public_key, PublicKey::System) {
+        bail!("public key cannot be system key");
+    }
+    let public_key_bytes = public_key
+        .to_bytes()
+        .map_err(|err| anyhow!(err.to_string()))?;
+    Ok(hex::encode(public_key_bytes))
 }
 
 struct WalletStorage {

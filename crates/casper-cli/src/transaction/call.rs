@@ -10,9 +10,9 @@ use crate::storage::StorageConfig;
 use crate::utils;
 
 use super::{
-    DEFAULT_GAS_PRICE_TOLERANCE, looks_like_contract_hash, looks_like_package_hash,
-    parse_contract_hash, parse_package_hash, parse_runtime_args, resolve_from_secret_key,
-    simulate_transaction,
+    DEFAULT_GAS_PRICE_TOLERANCE, account_hash_initiator_from_secret_key, looks_like_contract_hash,
+    looks_like_package_hash, parse_contract_hash, parse_package_hash, parse_runtime_args,
+    resolve_from_secret_key, simulate_transaction,
 };
 
 #[derive(Args)]
@@ -68,6 +68,7 @@ pub fn handle(
         standard_payment: true,
     };
     let secret_key = resolve_from_secret_key(storage, &args.from)?;
+    let initiator_addr = account_hash_initiator_from_secret_key(&secret_key);
     let chain_name = network::active_network_chain_name(context)?;
     let (network_name, rpc_endpoint) = network::active_network_rpc(context)?;
 
@@ -114,6 +115,7 @@ pub fn handle(
     }
     .with_pricing_mode(pricing_mode)
     .with_chain_name(chain_name)
+    .with_initiator_addr(initiator_addr)
     .with_runtime_args(runtime_args)
     .with_secret_key(&secret_key);
 

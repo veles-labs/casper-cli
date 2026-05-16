@@ -4,8 +4,8 @@ use casper_types::account::AccountHash;
 use casper_types::bytesrepr::deserialize_from_slice;
 use casper_types::contracts::ContractHash;
 use casper_types::{
-    AddressableEntityHash, CLType, DeployHash, Digest, PackageHash, PublicKey, RuntimeArgs,
-    SecretKey, Transaction, TransactionHash, TransactionV1Hash, TransferTarget, URef,
+    AddressableEntityHash, CLType, DeployHash, Digest, InitiatorAddr, PackageHash, PublicKey,
+    RuntimeArgs, SecretKey, Transaction, TransactionHash, TransactionV1Hash, TransferTarget, URef,
 };
 use clap::{Args, Subcommand};
 use std::fs;
@@ -72,6 +72,10 @@ fn resolve_from_secret_key(storage: &StorageConfig, value: &str) -> Result<Secre
         return Ok(secret_key);
     }
     bail!("--from must be in the form wallet:account or a legacy wallet name");
+}
+
+fn account_hash_initiator_from_secret_key(secret_key: &SecretKey) -> InitiatorAddr {
+    InitiatorAddr::AccountHash(PublicKey::from(secret_key).to_account_hash())
 }
 
 fn parse_runtime_args(values: &[String]) -> Result<RuntimeArgs> {
@@ -300,14 +304,16 @@ fn looks_like_package_hash(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_contract_hash, parse_package_hash, parse_transaction_hash, parse_transfer_target,
+        account_hash_initiator_from_secret_key, parse_contract_hash, parse_package_hash,
+        parse_transaction_hash, parse_transfer_target,
     };
     use casper_types::bytesrepr::ToBytes;
     use casper_types::contracts::ContractHash;
     use casper_types::crypto::AsymmetricType;
     use casper_types::{
-        AccessRights, AddressableEntityHash, DeployHash, Digest, PackageHash, PublicKey,
-        TransactionHash, TransactionV1Hash, TransferTarget, URef, account::AccountHash,
+        AccessRights, AddressableEntityHash, DeployHash, Digest, InitiatorAddr, PackageHash,
+        PublicKey, SecretKey, TransactionHash, TransactionV1Hash, TransferTarget, URef,
+        account::AccountHash,
     };
 
     fn sample_digest_hex() -> String {
@@ -352,6 +358,18 @@ mod tests {
             .expect_err("invalid hex should error");
         let message = format!("{err}");
         assert!(message.contains("invalid transaction hash hex"));
+    }
+
+    #[test]
+    fn secret_key_initiator_uses_account_hash_variant() {
+        let secret_key =
+            SecretKey::ed25519_from_bytes([7u8; SecretKey::ED25519_LENGTH]).expect("secret key");
+        let public_key = PublicKey::from(&secret_key);
+        let initiator_addr = account_hash_initiator_from_secret_key(&secret_key);
+        assert_eq!(
+            initiator_addr,
+            InitiatorAddr::AccountHash(public_key.to_account_hash())
+        );
     }
 
     #[test]

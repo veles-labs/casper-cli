@@ -1,7 +1,4 @@
 use anyhow::{Result, anyhow, bail};
-use bip32::{DerivationPath, XPrv};
-use casper_types::bytesrepr::ToBytes;
-use casper_types::{ED25519_TAG, PublicKey, SECP256K1_TAG, SecretKey};
 use clap::Args;
 use comfy_table::{Cell, Table};
 use std::collections::HashSet;
@@ -9,15 +6,13 @@ use tinytemplate::TinyTemplate;
 use zeroize::Zeroize;
 
 use crate::network;
-use crate::slip0010;
 use crate::storage::StorageConfig;
 
 use super::{
-    DerivationScheme, WalletType, add_account, ensure_wallet_exists, load_metadata, root_seed,
-    save_metadata, wallet_storage,
+    WalletType, add_account, derive_account_candidate, derive_secret_key_for_path,
+    ensure_wallet_exists, load_metadata, root_seed, save_metadata, secret_key_bytes,
+    wallet_storage,
 };
-
-const DEFAULT_BIP32_SECP256K1_PATH_PREFIX: &str = "m/44'/506'/0'/0";
 
 #[derive(Args)]
 /// Arguments for deriving accounts.
@@ -125,44 +120,28 @@ pub fn handle(
         let mut table = Table::new();
         table.set_header(vec!["Name", "Path", "Account Hash"]);
         for (index, name) in derived_names {
-            let (path, secret_key) = match metadata.derivation {
-                DerivationScheme::Bip32Secp256k1 => {
-                    let path = format!("{}/{}", DEFAULT_BIP32_SECP256K1_PATH_PREFIX, index);
-                    let derivation_path = path.parse::<DerivationPath>()?;
-                    let xprv = XPrv::derive_from_path(&seed, &derivation_path)?;
-                    let mut secret_key_bytes = xprv.to_bytes();
-                    let secret_key = SecretKey::secp256k1_from_bytes(secret_key_bytes)
-                        .map_err(|err| anyhow!(err.to_string()))?;
-                    secret_key_bytes.zeroize();
-                    (path, secret_key)
-                }
-                DerivationScheme::Slip10Ed25519 => {
-                    let path = slip0010::default_path(index);
-                    let indexes = slip0010::parse_hardened_path(&path)?;
-                    let mut secret_key_bytes = slip0010::derive_private_key(&seed, &indexes)?;
-                    let secret_key = SecretKey::ed25519_from_bytes(secret_key_bytes)
-                        .map_err(|err| anyhow!(err.to_string()))?;
-                    secret_key_bytes.zeroize();
-                    (path, secret_key)
-                }
-            };
-
-            let public_key = PublicKey::from(&secret_key);
-            let public_key_hex = public_key_hex(&public_key)?;
-            let account_hash = format!("{}", public_key.to_account_hash());
+            let candidate = derive_account_candidate(&seed, metadata.derivation, index)?;
             table.add_row(vec![
                 Cell::new(&name),
-                Cell::new(&path),
-                Cell::new(&account_hash),
+                Cell::new(&candidate.path),
+                Cell::new(&candidate.account_hash_hex),
             ]);
 
             if args.show_private {
+                let secret_key =
+                    derive_secret_key_for_path(&seed, metadata.derivation, &candidate.path)?;
                 let mut private_key_bytes = secret_key_bytes(&secret_key)?;
                 println!("Private key: {}", hex::encode(&private_key_bytes));
                 private_key_bytes.zeroize();
             }
 
-            if add_account(&mut metadata, &name, index, &path, &public_key_hex) {
+            if add_account(
+                &mut metadata,
+                &name,
+                index,
+                &candidate.path,
+                &candidate.public_key_hex,
+            ) {
                 updated = true;
             }
         }
@@ -179,35 +158,4 @@ pub fn handle(
     })();
     seed.zeroize();
     result
-}
-
-fn secret_key_bytes(secret_key: &SecretKey) -> Result<Vec<u8>> {
-    match secret_key {
-        SecretKey::System => bail!("secret key cannot be system key"),
-        SecretKey::Ed25519(key) => {
-            let mut bytes = Vec::with_capacity(1 + SecretKey::ED25519_LENGTH);
-            bytes.push(ED25519_TAG);
-            bytes.extend_from_slice(&key.to_bytes());
-            Ok(bytes)
-        }
-        SecretKey::Secp256k1(key) => {
-            let raw_bytes = key.to_bytes();
-            let raw_bytes: &[u8] = raw_bytes.as_ref();
-            let mut bytes = Vec::with_capacity(1 + raw_bytes.len());
-            bytes.push(SECP256K1_TAG);
-            bytes.extend_from_slice(raw_bytes);
-            Ok(bytes)
-        }
-        _ => bail!("unsupported secret key variant"),
-    }
-}
-
-fn public_key_hex(public_key: &PublicKey) -> Result<String> {
-    if matches!(public_key, PublicKey::System) {
-        bail!("public key cannot be system key");
-    }
-    let public_key_bytes = public_key
-        .to_bytes()
-        .map_err(|err| anyhow!(err.to_string()))?;
-    Ok(hex::encode(public_key_bytes))
 }

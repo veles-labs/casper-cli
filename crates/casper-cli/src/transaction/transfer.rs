@@ -10,8 +10,8 @@ use crate::storage::StorageConfig;
 use crate::utils;
 
 use super::{
-    DEFAULT_GAS_PRICE_TOLERANCE, resolve_from_secret_key, resolve_transfer_target,
-    simulate_transaction,
+    DEFAULT_GAS_PRICE_TOLERANCE, account_hash_initiator_from_secret_key, resolve_from_secret_key,
+    resolve_transfer_target, simulate_transaction,
 };
 
 #[derive(Args)]
@@ -45,6 +45,7 @@ pub fn handle(
     let amount = utils::parse_cspr_to_motes("transfer amount", &args.amount)?;
     let target = resolve_transfer_target(storage, &args.to)?;
     let secret_key = resolve_from_secret_key(storage, &args.from)?;
+    let initiator_addr = account_hash_initiator_from_secret_key(&secret_key);
     let chain_name = network::active_network_chain_name(context)?;
     let (network_name, rpc_endpoint) = network::active_network_rpc(context)?;
 
@@ -57,6 +58,7 @@ pub fn handle(
         .map_err(|err| anyhow!(err.to_string()))?
         .with_pricing_mode(pricing_mode)
         .with_chain_name(chain_name)
+        .with_initiator_addr(initiator_addr)
         .with_secret_key(&secret_key);
 
     let tx = builder.build()?;
