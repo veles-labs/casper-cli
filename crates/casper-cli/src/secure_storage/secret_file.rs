@@ -210,19 +210,21 @@ fn decrypt_secret(
 
     let ciphertext = hex::decode(&encrypted.ciphertext)?;
     let nonce: XNonce = nonce_bytes.into();
-    let plaintext = cipher
-        .decrypt(
-            &nonce,
-            Payload {
-                msg: &ciphertext,
-                aad: wallet_name.as_bytes(),
-            },
-        )
-        .map_err(|_| {
-            StorageError::new(
-                "failed to decrypt wallet secret; check the master password and wallet name",
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(
+                &nonce,
+                Payload {
+                    msg: &ciphertext,
+                    aad: wallet_name.as_bytes(),
+                },
             )
-        })?;
+            .map_err(|_| {
+                StorageError::new(
+                    "failed to decrypt wallet secret; check the master password and wallet name",
+                )
+            })?,
+    );
 
     let secret = serde_json::from_slice(&plaintext)?;
     Ok(secret)

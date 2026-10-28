@@ -454,6 +454,10 @@ Arguments:
 
 ## Security notes
 
+File-backed secrets are replaced through unique temporary files. On Unix,
+permissions are set to `0600` before writing. Password and decrypted plaintext
+buffers are zeroized on drop.
+
 Wallet secrets are encrypted at rest by default:
 
 - Key derivation uses Argon2id (memory-hard) with ~64 MiB RAM, 3 iterations, and 1 lane for interactive CLI usage.

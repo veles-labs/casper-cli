@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 ### Fixed
 ### Security
+- Wallet secret replacements now use unique temporary files with restrictive permissions before writing, and password/decrypted plaintext buffers are zeroized on drop.
 
 ## [0.4.0] - 2026-01-22
 ### Added

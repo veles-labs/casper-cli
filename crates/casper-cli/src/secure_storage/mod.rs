@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use zeroize::Zeroize;
 
+pub(crate) mod atomic_file;
 pub mod file;
 pub mod keyring;
 mod secret_file;

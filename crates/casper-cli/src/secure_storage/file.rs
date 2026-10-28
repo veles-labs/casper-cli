@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anstyle::{AnsiColor, Style};
 use serde::Deserialize;
 
+use super::atomic_file::PendingWrite;
 use super::secret_file::{
     SecretFile, decode_secret, encode_encrypted_secret, encode_plain_secret, parse_secret_file,
 };
@@ -27,7 +28,7 @@ const SECRETS_DIR_NAME: &str = "secrets";
 enum PasswordSource {
     Prompt,
     #[cfg(test)]
-    Fixed(String),
+    Fixed(Zeroizing<String>),
 }
 
 impl FileSecureStorage {
@@ -43,7 +44,7 @@ impl FileSecureStorage {
     fn with_password(base_dir: PathBuf, password: impl Into<String>) -> Self {
         Self {
             base_dir,
-            password_source: PasswordSource::Fixed(password.into()),
+            password_source: PasswordSource::Fixed(Zeroizing::new(password.into())),
         }
     }
 
@@ -70,15 +71,6 @@ impl FileSecureStorage {
         Ok(())
     }
 
-    fn restrict_file_permissions(path: &Path) -> Result<(), Box<dyn Error>> {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-        }
-        Ok(())
-    }
-
     fn restrict_dir_permissions(path: &Path) -> Result<(), Box<dyn Error>> {
         #[cfg(unix)]
         {
@@ -89,19 +81,17 @@ impl FileSecureStorage {
     }
 
     fn write_atomic(path: &Path, data: &[u8]) -> Result<(), Box<dyn Error>> {
-        let tmp_path = path.with_extension("tmp");
-        fs::write(&tmp_path, data)?;
-        fs::rename(&tmp_path, path)?;
-        Self::restrict_file_permissions(path)?;
-        Ok(())
+        PendingWrite::new(path, data)?.persist()
     }
 
     fn master_password(&self, confirm: bool) -> Result<Zeroizing<String>, Box<dyn Error>> {
         match &self.password_source {
             PasswordSource::Prompt => {
-                let password = rpassword::prompt_password("Enter master password: ")?;
+                let password =
+                    Zeroizing::new(rpassword::prompt_password("Enter master password: ")?);
                 if confirm {
-                    let confirmation = rpassword::prompt_password("Confirm master password: ")?;
+                    let confirmation =
+                        Zeroizing::new(rpassword::prompt_password("Confirm master password: ")?);
                     if password != confirmation {
                         return Err("master passwords do not match".into());
                     }
@@ -112,10 +102,10 @@ impl FileSecureStorage {
                 } else if password.len() < 12 {
                     eprintln!("WARNING: master password is short; consider using 12+ characters.");
                 }
-                Ok(Zeroizing::new(password))
+                Ok(password)
             }
             #[cfg(test)]
-            PasswordSource::Fixed(password) => Ok(Zeroizing::new(password.clone())),
+            PasswordSource::Fixed(password) => Ok(password.clone()),
         }
     }
 
@@ -144,7 +134,7 @@ impl SecureStorage for FileSecureStorage {
     ) -> Result<(), Box<dyn Error>> {
         let path = self.secret_path(wallet_name);
         Self::ensure_dir(&path)?;
-        let data = match mode {
+        let data = Zeroizing::new(match mode {
             StoreMode::Unencrypted => {
                 Self::warn_unencrypted_wallet();
                 encode_plain_secret(secret)?
@@ -153,14 +143,14 @@ impl SecureStorage for FileSecureStorage {
                 let password = self.master_password(true)?;
                 encode_encrypted_secret(secret, wallet_name, password.as_bytes())?
             }
-        };
+        });
         Self::write_atomic(&path, &data)?;
         Ok(())
     }
 
     fn load(&self, wallet_name: &str) -> Result<RootSecret, Box<dyn Error>> {
         let path = self.secret_path(wallet_name);
-        let data = fs::read_to_string(path)?;
+        let data = Zeroizing::new(fs::read_to_string(path)?);
         let secret_file = parse_secret_file(&data)?;
         match secret_file {
             SecretFile::Plain(_) => decode_secret(secret_file, wallet_name, None),
@@ -380,5 +370,24 @@ mod tests {
         let loaded = storage.load("wallet-none").expect("load");
 
         assert_eq!(secret, loaded);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_does_not_follow_a_predictable_temporary_symlink() {
+        let temp = tempfile::tempdir().unwrap();
+        let victim = temp.path().join("unrelated-file");
+        fs::write(&victim, "unchanged").unwrap();
+        std::os::unix::fs::symlink(&victim, temp.path().join("wallet.tmp")).unwrap();
+        let storage = storage_at(temp.path());
+        let secret = RootSecret::Seeded {
+            seed: "seed".to_string(),
+            domain: "domain".to_string(),
+        };
+        storage
+            .store("wallet", &secret, StoreMode::Unencrypted)
+            .unwrap();
+        assert_eq!(fs::read_to_string(victim).unwrap(), "unchanged");
+        assert_eq!(storage.load("wallet").unwrap(), secret);
     }
 }
