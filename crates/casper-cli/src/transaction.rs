@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use casper_execution_engine::engine_state::{EngineConfig, ExecutionEngineV1};
 use casper_types::account::AccountHash;
 use casper_types::bytesrepr::deserialize_from_slice;
@@ -8,14 +8,15 @@ use casper_types::{
     RuntimeArgs, SecretKey, Transaction, TransactionHash, TransactionV1Hash, TransferTarget, URef,
 };
 use clap::{Args, Subcommand};
+use serde::Deserialize;
 use std::fs;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
-use veles_casper_rust_sdk::jsonrpc::CasperClient;
+use veles_casper_rust_sdk::jsonrpc::{CasperClient, GetBlockResult};
 
 use crate::arguments::parse_argument;
 use crate::contract_runtime::ContractRuntime;
-use crate::contract_runtime::store::SledStore;
+use crate::contract_runtime::store::{SledStore, rpc_client};
 use crate::storage::StorageConfig;
 use crate::wallet;
 use crate::{cl_type, cl_value};
@@ -27,6 +28,14 @@ mod put;
 mod transfer;
 
 const DEFAULT_GAS_PRICE_TOLERANCE: u8 = 1;
+
+#[derive(Deserialize)]
+struct RpcResponse<T> {
+    jsonrpc: String,
+    id: u64,
+    result: Option<T>,
+    error: Option<serde_json::Value>,
+}
 
 #[derive(Args)]
 /// Transaction submission commands.
@@ -116,8 +125,7 @@ fn simulate_transaction(
     transaction: Transaction,
     raw: bool,
 ) -> Result<()> {
-    let (network_name, binary_port) = network::active_network_binary_port(context)?;
-    let (_network_name, rpc) = network::active_network_rpc(context)?;
+    let (network_name, rpc) = network::active_network_rpc(context)?;
 
     let base_dir = storage.base_dir()?;
     let runtime_dir = base_dir.join("global-state-cache").join(&network_name);
@@ -126,19 +134,15 @@ fn simulate_transaction(
     let db = sled::open(&runtime_dir)
         .with_context(|| format!("failed to open {}", runtime_dir.display()))?;
     let store = SledStore::new(
-        binary_port.clone(),
+        rpc.clone(),
         Arc::new(db),
-        &format!("trie-cache-{network_name}"),
-    );
+        &format!("query-cache-{network_name}"),
+    )?;
     let engine = ExecutionEngineV1::new(EngineConfig::default());
     let contract_runtime = ContractRuntime::new(store.clone(), engine);
-    let runtime = Runtime::new().context("failed to start async runtime")?;
-
-    let client = CasperClient::new(rpc);
-    let block = runtime
-        .block_on(async { client.get_block(None).await })?
+    let block = latest_block(&rpc)?
         .block_with_signatures
-        .ok_or(anyhow!("Nope"))?
+        .ok_or(anyhow!("chain_get_block returned no block"))?
         .block;
     let block_header = block.clone_header();
     let state_root_hash = *block.state_root_hash();
@@ -161,7 +165,7 @@ fn simulate_transaction(
 
     if raw {
         let (hits_after, misses_after) = store.cache_stats();
-        let cleaned_up = store.gc_unreferenced(&[state_root_hash.value()])?;
+        let cleaned_up = store.gc_other_roots(state_root_hash)?;
         let error = result.error().map(ToString::to_string);
         println!(
             "{}",
@@ -222,12 +226,51 @@ fn simulate_transaction(
     }
 
     let (hits_after, misses_after) = store.cache_stats();
-    println!("New tries downloaded: {}", misses_after - misses_before);
+    println!(
+        "State queries during execution: {}",
+        misses_after - misses_before
+    );
     println!("Cache hits during execution: {}", hits_after - hits_before);
-    println!("Cleaning up unreferenced tries...");
-    let cleaned_up = store.gc_unreferenced(&[state_root_hash.value()])?;
-    println!("Cleaned up {} unreferenced tries", cleaned_up);
+    let cleaned_up = store.gc_other_roots(state_root_hash)?;
+    println!(
+        "Cleaned up {} cached values from other state roots",
+        cleaned_up
+    );
     Ok(())
+}
+
+fn latest_block(rpc_endpoint: &str) -> Result<GetBlockResult> {
+    const REQUEST_ID: u64 = 1;
+
+    let client = rpc_client()?;
+    let runtime = Runtime::new().context("failed to start async runtime")?;
+    let response = runtime
+        .block_on(async {
+            client
+                .post(rpc_endpoint)
+                .json(&serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": REQUEST_ID,
+                    "method": "chain_get_block",
+                    "params": {},
+                }))
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<RpcResponse<GetBlockResult>>()
+                .await
+        })
+        .context("get latest block for simulation")?;
+
+    ensure!(
+        response.jsonrpc == "2.0" && response.id == REQUEST_ID,
+        "invalid chain_get_block response ID or version"
+    );
+    match (response.result, response.error) {
+        (Some(result), None) => Ok(result),
+        (None, Some(error)) => bail!("chain_get_block failed: {error}"),
+        _ => bail!("chain_get_block response must contain either a result or an error"),
+    }
 }
 
 fn speculative_execute_transaction(

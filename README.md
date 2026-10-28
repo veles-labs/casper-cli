@@ -274,9 +274,7 @@ chain_name = "casper-dev"
 rest = "http://127.0.0.1:14101"
 sse = "http://127.0.0.1:18101/events"
 rpc = "http://127.0.0.1:11101/rpc"
-# binary_port supports address:port, tcp://address:port, ws://address[:port]/path, or wss://address[:port]/path.
-# ws defaults to port 80 and wss defaults to port 443 if omitted.
-# wss uses system trust roots and will fail on invalid certificates.
+# Local simulation uses rpc; binary_port is not needed for --simulate.
 binary_port = "127.0.0.1:28101"
 
 [networks.mainnet]
@@ -351,10 +349,20 @@ casper-cli config edit
 submitting it. The endpoint must expose the Casper `speculative_exec_txn` method. This is the
 closest preview of how the selected node will execute a transaction.
 
-Simulation uses the network binary port; set `binary_port` (`address:port`, `tcp://address:port`, `ws://address[:port]/path`, or `wss://address[:port]/path`) in `config.toml` before using `--simulate`.
+Local simulation remains available through `--simulate`. It uses the active network's `rpc`
+endpoint and requires `query_global_state`; no binary port or trie requests are needed.
+Add `--raw` to emit one JSON simulation result with `schemaVersion: 1`, a `success`
+flag, `error`, `blockHeight`, the full `stateRootHash`, decimal-string `gasConsumed`,
+the typed CLValue `returnValue`, and query/cache statistics. Execution failures
+also emit this result before exiting nonzero. Diagnostics and wallet prompts use stderr.
 Wallet references use `wallet:account`; legacy wallets can be referenced by wallet name alone.
-The simulator runs a local execution engine and will download trie objects from the node via the
-binary port as needed. Unlike speculative execution, it can report return values, which can be
+The simulator runs a local execution engine and fetches state values by key at the selected block's
+state root. Merkle proofs are verified against that root and cached locally; values from other
+roots are removed after successful simulation. Missing-key responses rely on the RPC node's answer,
+since the query API does not return absence proofs. Transport, query, and proof failures abort
+simulation. Key enumeration (`keys_with_prefix`) is disabled: operations requiring prefix scans
+fail explicitly instead of returning an incomplete list.
+Unlike speculative execution, local simulation can report return values, which can be
 useful for calls like `balance_of` on a CEP-18 token without reconstructing dictionary item keys
 from base64.
 Return values are rendered on a best-effort basis into a human-readable CLValue representation,
@@ -372,15 +380,6 @@ Examples (from unit tests):
 casper-cli transaction call --simulate --from devnet:user-1 $CONTRACT_HASH hello
 ```
 
-Add `--raw` to emit one JSON simulation result with `schemaVersion: 1`, a `success`
-flag, `error`, `blockHeight`, the full `stateRootHash`, decimal-string `gasConsumed`,
-the typed CLValue `returnValue`, and cache statistics. Execution failures
-also emit this result before exiting nonzero. Diagnostics and wallet prompts use stderr.
-
-```bash
-casper-cli transaction call --simulate --raw --from devnet:user-1 $CONTRACT_HASH hello
-```
-
 Example output:
 
 ```
@@ -388,15 +387,14 @@ Simulation result on devnet at block height 10964:
 Gas used: 0.013064020
 Execution succeeded.
 Return String: "Hello, world!"
-New tries downloaded: 1
+State queries during execution: 1
 Cache hits during execution: 25
-Cleaning up unreferenced tries...
-Cleaned up 2 unreferenced tries
+Cleaned up 2 cached values from other state roots
 ```
 
 ### transaction put
 
-Builds a session transaction from Wasm and submits it to the active network. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. Transactions are signed by the `--from` key and use that key's account hash as the `initiator_addr`. Use `--speculative` for node-side speculative execution without submission, or `--simulate` for the local execution engine via the binary port. The two modes are mutually exclusive. You can also use `tx` as an alias.
+Builds a session transaction from Wasm and submits it to the active network. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. Transactions are signed by the `--from` key and use that key's account hash as the `initiator_addr`. Use `--speculative` for node-side speculative execution without submission, or `--simulate` to run a local execution engine using state queries over RPC. The two modes are mutually exclusive. You can also use `tx` as an alias.
 
 ```bash
 casper-cli transaction put path/to/contract.wasm --payment-amount 2.5 --from mywallet:account-0
@@ -410,7 +408,7 @@ casper-cli transaction put path/to/contract.wasm --from mywallet:account-0 --raw
 
 ### transaction call
 
-Calls a stored contract by hash (formatted `contract-`/`addressable-entity-` or raw hex) using the `call` entry point. To call by name, pass the named key alias directly. Use `--package` to interpret the target as a package hash (`package-`, `contract-package-`, or raw hex; latest version by default) and `--version` with `--package` to select a specific package version. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. Transactions are signed by the `--from` key and use that key's account hash as the `initiator_addr`. Use `--speculative` for node-side speculative execution, or `--simulate` for the local execution engine via the binary port.
+Calls a stored contract by hash (formatted `contract-`/`addressable-entity-` or raw hex) using the `call` entry point. To call by name, pass the named key alias directly. Use `--package` to interpret the target as a package hash (`package-`, `contract-package-`, or raw hex; latest version by default) and `--version` with `--package` to select a specific package version. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. Transactions are signed by the `--from` key and use that key's account hash as the `initiator_addr`. Use `--speculative` for node-side speculative execution, or `--simulate` for the local execution engine.
 
 ```bash
 casper-cli transaction call contract-... entry_point --from mywallet:account-0
@@ -423,6 +421,7 @@ casper-cli tx call contract-package-... entry_point --package --from mywallet:ac
 casper-cli tx call my_package entry_point --package --version 3 --from mywallet:account-0
 casper-cli tx call <contract-hash-hex> entry_point --from mywallet:account-0 --speculative
 casper-cli tx call <contract-hash-hex> entry_point --from mywallet:account-0 --simulate
+casper-cli tx call <contract-hash-hex> entry_point --from mywallet:account-0 --simulate --raw
 casper-cli tx call <contract-hash-hex> entry_point --from mywallet:account-0 --raw
 ```
 
@@ -488,6 +487,18 @@ Arguments:
 
 - `--arg name:cltype=value` to pass a typed argument (CLType syntax supports nesting like `Option<Bool>` or `Result<U64, U64>`).
 - `--arg name=value` to pass raw bytes as hex with implicit `Any` type (optional `0x` prefix).
+
+## Testing
+
+Run the local checks with `cargo test --all --all-features`.
+The optional live CEP-18 check compares local execution of `name`, `symbol`, `total_supply`,
+and `balance_of` with state queries at the same testnet block:
+
+```bash
+cargo test live_cep18 -- --ignored --nocapture
+```
+
+This check only queries public state and executes unsigned transactions locally.
 
 ## Security notes
 

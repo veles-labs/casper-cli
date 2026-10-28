@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 - Added structured JSON results for `--simulate --raw`, including typed return values,
-  execution errors, gas consumption and cache statistics.
+  execution errors, gas consumption and state-query statistics.
 - Added `wallet password <name>` to set or change password protection for file-backed wallets, with `--unencrypted` to remove it explicitly.
 - Added `wallet derive-vanity` for parallel vanity account derivation scans.
 - Added `--speculative` to transaction put, call, and transfer commands for node-side `speculative_exec_txn` preflight without submission.
@@ -16,11 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pinned the development toolchain to Rust 1.99.1.
 - Transaction submission now uses the `--from` key's account hash as the default `initiator_addr`
   for transfers and Wasm/contract calls.
+- Local transaction simulation now queries state by key over JSON-RPC and verifies and caches Merkle proofs at the selected state root, without requiring binary-port trie access. Operations using `keys_with_prefix` fail explicitly because key enumeration is disabled.
 ### Deprecated
 ### Removed
 ### Fixed
 - Contract calls with `--package` now recognize `contract-package-` hashes instead of
   treating them as named key aliases, including during local simulation.
+- Local simulation no longer invokes macOS system-proxy or trust-service discovery for RPC
+  requests, avoiding `SystemConfiguration` and certificate-verification failures in headless
+  processes while retaining TLS verification with bundled public roots.
 ### Security
 - Wallet secret replacements now use unique temporary files with restrictive permissions before writing, and password/decrypted plaintext buffers are zeroized on drop.
 

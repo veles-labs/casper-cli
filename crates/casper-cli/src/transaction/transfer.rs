@@ -29,7 +29,7 @@ pub struct TransferArgs {
     /// Gas price tolerance (minimum 1).
     #[arg(long, default_value_t = DEFAULT_GAS_PRICE_TOLERANCE)]
     gas_price_tolerance: u8,
-    /// Simulate execution using the network binary port.
+    /// Simulate execution locally using state queries to the network RPC.
     #[arg(long)]
     simulate: bool,
     /// Execute speculatively through the active network RPC without submitting.

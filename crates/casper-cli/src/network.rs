@@ -208,24 +208,6 @@ pub(crate) fn active_network_rpc(context: &ConfigContext) -> Result<(String, Str
     Ok((active, entry.rpc.clone()))
 }
 
-pub(crate) fn active_network_binary_port(context: &ConfigContext) -> Result<(String, String)> {
-    let config_path = context.path();
-    let config = load_or_init_config_with_options(config_path, context.options())?;
-    let active = config
-        .active
-        .clone()
-        .ok_or_else(|| anyhow!("active network not set"))?;
-    let entry = config
-        .networks
-        .get(&active)
-        .ok_or_else(|| anyhow!("active network '{active}' not found"))?;
-    let binary_port = entry.binary_port.trim();
-    if binary_port.is_empty() {
-        bail!("active network '{active}' has no binary port configured");
-    }
-    Ok((active, binary_port.to_string()))
-}
-
 pub(crate) fn active_network_name_and_chain_name(
     context: &ConfigContext,
 ) -> Result<(String, String)> {

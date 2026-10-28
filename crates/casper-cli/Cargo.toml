@@ -37,17 +37,14 @@ casper-types = "6.1.0"
 casper-execution-engine = { version = "8.1.1" }
 casper-storage = { version = "2.1.1" }
 sled = "0.34.7"
-casper-binary-port = "1.1.1"
-veles-casper-contract-api = { version = "0.1.0", default-features = false, features = ["std"] }
-tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-native-roots"] }
-futures-util = "0.3.31"
-url = "2.5.8"
 rustls = { version = "0.23.36", features = ["ring", "std", "tls12"], default-features = false }
 indicatif = "0.18.3"
 bip39 = { version = "2.2.2", features = ["rand_core"] }
 rayon = "1.12.0"
 regex = "1.12.3"
+reqwest = { version = "0.13.5", default-features = false, features = ["hickory-dns", "json", "rustls-no-provider"] }
 tempfile = "3"
+webpki-roots = "1.0.11"
 
 [dev-dependencies]
 proptest = "1"

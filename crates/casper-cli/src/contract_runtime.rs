@@ -49,14 +49,9 @@ impl SessionDataV1Owned {
 
 /// A runtime for executing smart contract transactions in local mode.
 ///
-/// This runtime uses a sled store acting as a local trie database and an execution engine
-/// to execute smart contract transactions.
-///
-/// The store is trying to download trie objects from remote binary port server if the object is
-/// not found in the local sled database. If a given trie object is present, then it's used directly.
-///
-/// Usually with a warm cache and a simple smart contract execution, this runtime should be able to
-/// execute transactions in a few milliseconds (~1-2 new tries downloaded per execution).
+/// State is queried by key over JSON-RPC at a fixed state root. Verified proofs are
+/// cached in sled, while writes remain in the execution engine's tracking copy.
+/// Operations that enumerate keys are unsupported.
 #[derive(Clone)]
 pub struct ContractRuntime {
     pub(crate) store: SledStore,
@@ -75,6 +70,7 @@ impl ContractRuntime {
     ///
     /// This mimics the contract runtime behavior in the Casper node, but without networking, transaction acceptor, etc.
     pub fn execute(&self, block_info: BlockInfo, txn: TransactionV1) -> Result<WasmV1Result> {
+        self.store.take_error();
         let args = txn
             .deserialize_field::<TransactionArgs>(ARGS_MAP_KEY)
             .unwrap();
@@ -118,6 +114,13 @@ impl ContractRuntime {
         };
 
         // Actually execute the smart contract transaction.
-        Ok(self.engine.execute(&provider, wasm_v1_request))
+        let result = self.engine.execute(&provider, wasm_v1_request);
+        if let Some(error) = self.store.take_error() {
+            return Err(error.context("simulation state access failed"));
+        }
+        Ok(result)
     }
 }
+
+#[cfg(test)]
+mod tests;

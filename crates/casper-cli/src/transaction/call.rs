@@ -41,7 +41,7 @@ pub struct CallArgs {
     /// Package version (requires --package).
     #[arg(long, value_name = "VERSION")]
     version: Option<EntityVersion>,
-    /// Simulate execution using the network binary port.
+    /// Simulate execution locally using state queries to the network RPC.
     #[arg(long)]
     simulate: bool,
     /// Execute speculatively through the active network RPC without submitting.
