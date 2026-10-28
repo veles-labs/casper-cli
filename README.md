@@ -64,7 +64,8 @@ casper-cli config edit
 The layout under the base directory (file storage backend):
 
 - `wallets/<name>.json` - wallet metadata (accounts, type, encryption flag)
-- `secrets/<name>.enc` - encrypted wallet root secret
+- `secrets/<name>.enc` - wallet root secret (encrypted by default)
+- `secrets/<name>.lock` - empty lock file used to serialize password changes
 
 When using `storage.type = "keyring"`, secrets are stored in the OS keyring instead of the `secrets/` directory, the CLI does not prompt for a master password, and `--unencrypted` is not supported.
 
@@ -137,6 +138,34 @@ Stdin form:
 ```bash
 cat /path/to/secret_key.pem | casper-cli wallet import-legacy mywallet
 ```
+
+### wallet password
+
+Sets or changes the password protecting an existing file-backed wallet. Encrypted wallets prompt
+for the current password first, then ask for a new password and confirmation. Unencrypted wallets
+only prompt for the new password. This changes file encryption, not the BIP-39 passphrase, wallet
+keys, derived accounts, or account names. It works with mnemonic, seeded, and imported PEM wallets.
+
+```bash
+casper-cli wallet password mywallet
+```
+
+To remove password protection, explicitly request plaintext storage:
+
+```bash
+casper-cli wallet password mywallet --unencrypted
+```
+
+> [!WARNING]
+> Removing protection stores the wallet secret in plaintext. Anyone who can read the secret file
+> can control the wallet. The command prints a warning before writing plaintext.
+
+New passwords cannot be empty; use `--unencrypted` to remove protection. Passwords are read through
+hidden terminal prompts and cannot be passed as command-line arguments. Changes apply only to the
+named wallet. Keyring-backed wallets use OS-managed protection and do not support this command.
+Secret files are replaced atomically with restrictive permissions. If updating wallet metadata
+fails after replacing the secret, the command attempts to restore the original protection and
+reports any rollback failure.
 
 ### wallet list
 

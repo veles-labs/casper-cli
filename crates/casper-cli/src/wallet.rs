@@ -30,6 +30,7 @@ mod external;
 mod import_legacy;
 mod info;
 mod list;
+mod password;
 mod recover;
 mod rename;
 
@@ -65,6 +66,8 @@ pub enum WalletCommand {
     List,
     /// Show wallet metadata and known accounts.
     Info(info::InfoArgs),
+    /// Set, change, or remove a file-backed wallet's password.
+    Password(password::PasswordArgs),
     /// Derive one or more accounts from the wallet root.
     Derive(derive::DeriveArgs),
     /// Search derivation paths for vanity accounts.
@@ -187,6 +190,7 @@ pub fn handle(storage: &StorageConfig, context: &ConfigContext, args: WalletArgs
         WalletCommand::ImportLegacy(command) => import_legacy::handle(storage, command),
         WalletCommand::List => list::handle(storage),
         WalletCommand::Info(command) => info::handle(storage, context, command),
+        WalletCommand::Password(command) => password::handle(storage, command),
         WalletCommand::Derive(command) => derive::handle(storage, context, command),
         WalletCommand::DeriveVanity(command) => derive_vanity::handle(storage, context, command),
         WalletCommand::RenameAccount(command) => rename::handle(storage, command),

@@ -28,7 +28,18 @@ const SECRETS_DIR_NAME: &str = "secrets";
 enum PasswordSource {
     Prompt,
     #[cfg(test)]
-    Fixed(Zeroizing<String>),
+    Fixed {
+        current: Zeroizing<String>,
+        new: Zeroizing<String>,
+        confirmation: Zeroizing<String>,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum PasswordPurpose {
+    Master,
+    Current,
+    New,
 }
 
 impl FileSecureStorage {
@@ -42,9 +53,24 @@ impl FileSecureStorage {
 
     #[cfg(test)]
     fn with_password(base_dir: PathBuf, password: impl Into<String>) -> Self {
+        let password = Zeroizing::new(password.into());
+        Self::with_passwords(base_dir, &password, &password, &password)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_passwords(
+        base_dir: PathBuf,
+        current: &str,
+        new: &str,
+        confirmation: &str,
+    ) -> Self {
         Self {
             base_dir,
-            password_source: PasswordSource::Fixed(Zeroizing::new(password.into())),
+            password_source: PasswordSource::Fixed {
+                current: Zeroizing::new(current.to_string()),
+                new: Zeroizing::new(new.to_string()),
+                confirmation: Zeroizing::new(confirmation.to_string()),
+            },
         }
     }
 
@@ -85,28 +111,121 @@ impl FileSecureStorage {
     }
 
     fn master_password(&self, confirm: bool) -> Result<Zeroizing<String>, Box<dyn Error>> {
+        self.password(PasswordPurpose::Master, confirm)
+    }
+
+    fn read_password(
+        &self,
+        purpose: PasswordPurpose,
+        confirmation: bool,
+    ) -> Result<Zeroizing<String>, Box<dyn Error>> {
         match &self.password_source {
             PasswordSource::Prompt => {
-                let password =
-                    Zeroizing::new(rpassword::prompt_password("Enter master password: ")?);
-                if confirm {
-                    let confirmation =
-                        Zeroizing::new(rpassword::prompt_password("Confirm master password: ")?);
-                    if password != confirmation {
-                        return Err("master passwords do not match".into());
-                    }
-                }
-                if password.is_empty() {
-                    Self::print_warning("WARNING: EMPTY MASTER PASSWORD");
-                    Self::print_warning_detail("Secrets will be stored with no protection.");
-                } else if password.len() < 12 {
-                    eprintln!("WARNING: master password is short; consider using 12+ characters.");
-                }
-                Ok(password)
+                let prompt = match (purpose, confirmation) {
+                    (PasswordPurpose::Master, false) => "Enter master password: ",
+                    (PasswordPurpose::Master, true) => "Confirm master password: ",
+                    (PasswordPurpose::Current, _) => "Enter current wallet password: ",
+                    (PasswordPurpose::New, false) => "Enter new wallet password: ",
+                    (PasswordPurpose::New, true) => "Confirm new wallet password: ",
+                };
+                Ok(Zeroizing::new(rpassword::prompt_password(prompt)?))
             }
             #[cfg(test)]
-            PasswordSource::Fixed(password) => Ok(password.clone()),
+            PasswordSource::Fixed {
+                current,
+                new,
+                confirmation: repeated,
+            } => Ok(match (purpose, confirmation) {
+                (PasswordPurpose::New, false) => new.clone(),
+                (PasswordPurpose::New, true) => repeated.clone(),
+                _ => current.clone(),
+            }),
         }
+    }
+
+    fn password(
+        &self,
+        purpose: PasswordPurpose,
+        confirm: bool,
+    ) -> Result<Zeroizing<String>, Box<dyn Error>> {
+        let password = self.read_password(purpose, false)?;
+        if matches!(purpose, PasswordPurpose::New) && password.is_empty() {
+            return Err("new wallet password cannot be empty; use --unencrypted to remove password protection".into());
+        }
+        if confirm && password != self.read_password(purpose, true)? {
+            return Err("passwords do not match".into());
+        }
+        if !matches!(purpose, PasswordPurpose::Current) {
+            if password.is_empty() {
+                Self::print_warning("WARNING: EMPTY MASTER PASSWORD");
+                Self::print_warning_detail("Secrets will be stored with no protection.");
+            } else if password.len() < 12 {
+                eprintln!("WARNING: master password is short; consider using 12+ characters.");
+            }
+        }
+        Ok(password)
+    }
+
+    /// Authenticate before rewriting a secret. The metadata update is prepared by
+    /// the caller; if it fails, atomically restore the original secret file.
+    pub(crate) fn change_password(
+        &self,
+        wallet_name: &str,
+        mode: StoreMode,
+        update_metadata: impl FnOnce() -> Result<(), Box<dyn Error>>,
+    ) -> Result<(), Box<dyn Error>> {
+        let path = self.secret_path(wallet_name);
+        Self::ensure_dir(&path)?;
+        // Keep a stable lock file: removing it would permit locking a different
+        // inode while another process still holds the original lock.
+        let mut options = fs::OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let lock = options.open(path.with_extension("lock"))?;
+        lock.try_lock()
+            .map_err(|error| format!("cannot lock wallet for password change: {error}"))?;
+
+        let original = Zeroizing::new(fs::read_to_string(&path)?);
+        let secret_file = parse_secret_file(&original)?;
+        let current_password = if matches!(secret_file, SecretFile::Encrypted(_)) {
+            Some(self.password(PasswordPurpose::Current, false)?)
+        } else {
+            None
+        };
+        let secret = decode_secret(
+            secret_file,
+            wallet_name,
+            current_password
+                .as_ref()
+                .map(|password| password.as_bytes()),
+        )?;
+        drop(current_password);
+        let replacement = Zeroizing::new(match mode {
+            StoreMode::Encrypted => {
+                let password = self.password(PasswordPurpose::New, true)?;
+                encode_encrypted_secret(&secret, wallet_name, password.as_bytes())?
+            }
+            StoreMode::Unencrypted => {
+                Self::warn_unencrypted_wallet();
+                encode_plain_secret(&secret)?
+            }
+        });
+        drop(secret);
+        Self::write_atomic(&path, &replacement)?;
+        if let Err(error) = update_metadata() {
+            if let Err(rollback) = Self::write_atomic(&path, original.as_bytes()) {
+                return Err(format!("wallet protection changed, but metadata update failed ({error}) and restoring the original secret failed ({rollback})").into());
+            }
+            return Err(format!(
+                "wallet metadata update failed; original password protection restored: {error}"
+            )
+            .into());
+        }
+        Ok(())
     }
 
     fn warn_unencrypted_wallet() {
@@ -370,6 +489,69 @@ mod tests {
         let loaded = storage.load("wallet-none").expect("load");
 
         assert_eq!(secret, loaded);
+    }
+
+    #[test]
+    fn metadata_failure_restores_the_original_secret_for_both_changes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let secret = RootSecret::Seeded {
+            seed: "unchanged-seed".to_string(),
+            domain: "domain".to_string(),
+        };
+        let original = storage_at(temp.path());
+        original
+            .store("wallet", &secret, StoreMode::Encrypted)
+            .unwrap();
+        let before = fs::read(temp.path().join("wallet.enc")).unwrap();
+        let storage = FileSecureStorage::with_passwords(
+            temp.path().to_path_buf(),
+            MASTER_PASSWORD,
+            "replacement-password",
+            "replacement-password",
+        );
+        for mode in [StoreMode::Encrypted, StoreMode::Unencrypted] {
+            let error = storage
+                .change_password("wallet", mode, || {
+                    Err("injected metadata write failure".into())
+                })
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("original password protection restored")
+            );
+            assert_eq!(fs::read(temp.path().join("wallet.enc")).unwrap(), before);
+            assert_eq!(original.load("wallet").unwrap(), secret);
+        }
+    }
+
+    #[test]
+    fn concurrent_password_changes_are_rejected() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = storage_at(temp.path());
+        let secret = RootSecret::Seeded {
+            seed: "seed".to_string(),
+            domain: "domain".to_string(),
+        };
+        storage
+            .store("wallet", &secret, StoreMode::Unencrypted)
+            .unwrap();
+        let before = fs::read(temp.path().join("wallet.enc")).unwrap();
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(temp.path().join("wallet.lock"))
+            .unwrap();
+        lock.try_lock().unwrap();
+        let error = storage
+            .change_password("wallet", StoreMode::Encrypted, || {
+                panic!("metadata must not be updated")
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("cannot lock wallet"));
+        assert_eq!(fs::read(temp.path().join("wallet.enc")).unwrap(), before);
     }
 
     #[cfg(unix)]

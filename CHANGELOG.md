@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Added structured JSON results for `--simulate --raw`, including typed return values,
   execution errors, gas consumption and cache statistics.
+- Added `wallet password <name>` to set or change password protection for file-backed wallets, with `--unencrypted` to remove it explicitly.
 - Added `wallet derive-vanity` for parallel vanity account derivation scans.
 ### Changed
 - Pinned the development toolchain to Rust 1.99.1.

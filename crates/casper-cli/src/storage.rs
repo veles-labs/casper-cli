@@ -41,10 +41,19 @@ impl StorageConfig {
 
     pub fn secret_storage(&self) -> Result<Box<dyn SecureStorage>> {
         match &self.backend {
-            StorageBackend::File { base_dir } => Ok(Box::new(FileSecureStorage::new(
-                base_dir.join(SECRETS_DIR_NAME),
-            ))),
+            StorageBackend::File { .. } => Ok(Box::new(self.file_secret_storage()?)),
             StorageBackend::Keyring => Ok(Box::new(KeyringSecureStorage::new())),
+        }
+    }
+
+    pub(crate) fn file_secret_storage(&self) -> Result<FileSecureStorage> {
+        match &self.backend {
+            StorageBackend::File { base_dir } => {
+                Ok(FileSecureStorage::new(base_dir.join(SECRETS_DIR_NAME)))
+            }
+            StorageBackend::Keyring => bail!(
+                "wallet passwords can only be changed for file-backed wallets; keyring protection is managed by the operating system"
+            ),
         }
     }
 

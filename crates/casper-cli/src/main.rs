@@ -90,3 +90,37 @@ fn main() -> Result<()> {
         Command::Account(command) => account::handle(&storage, &config_context, command),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::Parser;
+
+    #[test]
+    fn wallet_password_accepts_setting_or_removing_protection() {
+        for args in [
+            vec!["casper-cli", "wallet", "password", "mywallet"],
+            vec![
+                "casper-cli",
+                "wallet",
+                "password",
+                "mywallet",
+                "--unencrypted",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+        assert!(Cli::try_parse_from(["casper-cli", "wallet", "password"]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "casper-cli",
+                "wallet",
+                "password",
+                "mywallet",
+                "--password",
+                "secret"
+            ])
+            .is_err()
+        );
+    }
+}
