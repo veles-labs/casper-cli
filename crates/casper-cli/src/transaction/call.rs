@@ -44,7 +44,7 @@ pub struct CallArgs {
     /// Simulate execution using the network binary port.
     #[arg(long)]
     simulate: bool,
-    /// Print only the transaction hash on success.
+    /// Print only the transaction hash on submission, or JSON for local simulation.
     #[arg(long)]
     raw: bool,
 }
@@ -122,7 +122,7 @@ pub fn handle(
     let tx = builder.build()?;
     let transaction = Transaction::V1(tx);
     if args.simulate {
-        return simulate_transaction(storage, context, transaction);
+        return simulate_transaction(storage, context, transaction, args.raw);
     }
     let runtime = Runtime::new().context("failed to start async runtime")?;
     let tx_hash = runtime.block_on(async {

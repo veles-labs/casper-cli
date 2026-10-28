@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- Added structured JSON results for `--simulate --raw`, including typed return values,
+  execution errors, gas consumption and cache statistics.
 - Added `wallet derive-vanity` for parallel vanity account derivation scans.
 ### Changed
 - Transaction submission now uses the `--from` key's account hash as the default `initiator_addr`

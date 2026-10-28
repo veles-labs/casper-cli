@@ -114,6 +114,7 @@ fn simulate_transaction(
     storage: &StorageConfig,
     context: &network::ConfigContext,
     transaction: Transaction,
+    raw: bool,
 ) -> Result<()> {
     let (network_name, binary_port) = network::active_network_binary_port(context)?;
     let (_network_name, rpc) = network::active_network_rpc(context)?;
@@ -157,6 +158,32 @@ fn simulate_transaction(
     let result = contract_runtime
         .execute(block_info, txn)
         .context("execution")?;
+
+    if raw {
+        let (hits_after, misses_after) = store.cache_stats();
+        let cleaned_up = store.gc_unreferenced(&[state_root_hash.value()])?;
+        let error = result.error().map(ToString::to_string);
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "schemaVersion": 1,
+                "network": network_name,
+                "blockHeight": block_header.height(),
+                "stateRootHash": format!("{state_root_hash:x}"),
+                "success": error.is_none(),
+                "error": error,
+                "gasConsumed": result.consumed().value().to_string(),
+                "returnValue": result.ret(),
+                "stateQueries": misses_after - misses_before,
+                "cacheHits": hits_after - hits_before,
+                "cleanedUp": cleaned_up,
+            }))?
+        );
+        if let Some(error) = error {
+            bail!("simulation failed: {error}");
+        }
+        return Ok(());
+    }
 
     println!(
         "Simulation result on {network_name} at block height {}:",

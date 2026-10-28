@@ -337,6 +337,15 @@ Examples (from unit tests):
 casper-cli transaction call --simulate --from devnet:user-1 $CONTRACT_HASH hello
 ```
 
+Add `--raw` to emit one JSON simulation result with `schemaVersion: 1`, a `success`
+flag, `error`, `blockHeight`, the full `stateRootHash`, decimal-string `gasConsumed`,
+the typed CLValue `returnValue`, and cache statistics. Execution failures
+also emit this result before exiting nonzero. Diagnostics and wallet prompts use stderr.
+
+```bash
+casper-cli transaction call --simulate --raw --from devnet:user-1 $CONTRACT_HASH hello
+```
+
 Example output:
 
 ```
