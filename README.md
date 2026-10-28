@@ -347,6 +347,10 @@ casper-cli config edit
 
 ## Transaction commands
 
+`--speculative` asks the active network RPC endpoint to execute the signed transaction without
+submitting it. The endpoint must expose the Casper `speculative_exec_txn` method. This is the
+closest preview of how the selected node will execute a transaction.
+
 Simulation uses the network binary port; set `binary_port` (`address:port`, `tcp://address:port`, `ws://address[:port]/path`, or `wss://address[:port]/path`) in `config.toml` before using `--simulate`.
 Wallet references use `wallet:account`; legacy wallets can be referenced by wallet name alone.
 The simulator runs a local execution engine and will download trie objects from the node via the
@@ -392,20 +396,21 @@ Cleaned up 2 unreferenced tries
 
 ### transaction put
 
-Builds a session transaction from Wasm and submits it to the active network. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. Transactions are signed by the `--from` key and use that key's account hash as the `initiator_addr`. Use `--simulate` to run a local execution engine via the binary port without submitting the transaction. You can also use `tx` as an alias.
+Builds a session transaction from Wasm and submits it to the active network. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. Transactions are signed by the `--from` key and use that key's account hash as the `initiator_addr`. Use `--speculative` for node-side speculative execution without submission, or `--simulate` for the local execution engine via the binary port. The two modes are mutually exclusive. You can also use `tx` as an alias.
 
 ```bash
 casper-cli transaction put path/to/contract.wasm --payment-amount 2.5 --from mywallet:account-0
 casper-cli transaction put path/to/contract.wasm --from mywallet:account-0 --install-upgrade
 casper-cli transaction put path/to/contract.wasm --from mywallet:account-0 \
   --arg flag:Bool=true --arg amount:U512=1000000000000
+casper-cli transaction put path/to/contract.wasm --from mywallet:account-0 --speculative
 casper-cli transaction put path/to/contract.wasm --from mywallet:account-0 --simulate
 casper-cli transaction put path/to/contract.wasm --from mywallet:account-0 --raw
 ```
 
 ### transaction call
 
-Calls a stored contract by hash (formatted `contract-`/`addressable-entity-` or raw hex) using the `call` entry point. To call by name, pass the named key alias directly. Use `--package` to interpret the target as a package hash (`package-`, `contract-package-`, or raw hex; latest version by default) and `--version` with `--package` to select a specific package version. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. Transactions are signed by the `--from` key and use that key's account hash as the `initiator_addr`. Use `--simulate` to run a local execution engine via the binary port without submitting the transaction.
+Calls a stored contract by hash (formatted `contract-`/`addressable-entity-` or raw hex) using the `call` entry point. To call by name, pass the named key alias directly. Use `--package` to interpret the target as a package hash (`package-`, `contract-package-`, or raw hex; latest version by default) and `--version` with `--package` to select a specific package version. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. Transactions are signed by the `--from` key and use that key's account hash as the `initiator_addr`. Use `--speculative` for node-side speculative execution, or `--simulate` for the local execution engine via the binary port.
 
 ```bash
 casper-cli transaction call contract-... entry_point --from mywallet:account-0
@@ -416,6 +421,7 @@ casper-cli tx call my_contract entry_point --from mywallet:account-0
 casper-cli tx call package-... entry_point --package --from mywallet:account-0
 casper-cli tx call contract-package-... entry_point --package --from mywallet:account-0 --simulate
 casper-cli tx call my_package entry_point --package --version 3 --from mywallet:account-0
+casper-cli tx call <contract-hash-hex> entry_point --from mywallet:account-0 --speculative
 casper-cli tx call <contract-hash-hex> entry_point --from mywallet:account-0 --simulate
 casper-cli tx call <contract-hash-hex> entry_point --from mywallet:account-0 --raw
 ```
@@ -432,12 +438,13 @@ casper-cli tx get deploy-hash-<hex> --raw
 
 ### transaction transfer
 
-Transfers CSPR from a wallet account to a target account. Transactions are signed by the `--from` key and use that key's account hash as the `initiator_addr`. The recipient can be a wallet/account reference, public key bytes hex, or account hash bytes hex. You can set `--gas-price-tolerance` (default: 1). Use `--simulate` to run a local execution engine via the binary port without submitting the transaction, or `--raw` to print only the transaction hash.
+Transfers CSPR from a wallet account to a target account. Transactions are signed by the `--from` key and use that key's account hash as the `initiator_addr`. The recipient can be a wallet/account reference, public key bytes hex, or account hash bytes hex. You can set `--gas-price-tolerance` (default: 1). Use `--speculative` for node-side speculative execution, `--simulate` for the local execution engine, or `--raw` to print machine-readable output.
 
 ```bash
 casper-cli tx transfer --from mywallet:account-0 --to mywallet:account-1 --amount 1.25
 casper-cli tx transfer --from mywallet:account-0 --to <public-key-hex> --amount 10
 casper-cli tx transfer --from mywallet:account-0 --to <account-hash-hex> --amount 0.5 --gas-price-tolerance 2
+casper-cli tx transfer --from mywallet:account-0 --to mywallet:account-1 --amount 1.25 --speculative
 casper-cli tx transfer --from mywallet:account-0 --to mywallet:account-1 --amount 1.25 --simulate
 casper-cli tx transfer --from mywallet:account-0 --to mywallet:account-1 --amount 1.25 --raw
 ```

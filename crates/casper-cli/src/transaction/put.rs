@@ -14,7 +14,7 @@ use crate::utils;
 
 use super::{
     DEFAULT_GAS_PRICE_TOLERANCE, account_hash_initiator_from_secret_key, parse_runtime_args,
-    resolve_from_secret_key, simulate_transaction,
+    resolve_from_secret_key, simulate_transaction, speculative_execute_transaction,
 };
 
 #[derive(Args)]
@@ -40,7 +40,10 @@ pub struct PutArgs {
     /// Simulate execution using the network binary port.
     #[arg(long)]
     simulate: bool,
-    /// Print only the transaction hash on submission, or JSON for local simulation.
+    /// Execute speculatively through the active network RPC without submitting.
+    #[arg(long, conflicts_with = "simulate")]
+    speculative: bool,
+    /// Print only the transaction hash on submission, or JSON for simulation/speculation.
     #[arg(long)]
     raw: bool,
 }
@@ -80,6 +83,9 @@ pub fn handle(
     let transaction = Transaction::V1(tx);
     if args.simulate {
         return simulate_transaction(storage, context, transaction, args.raw);
+    }
+    if args.speculative {
+        return speculative_execute_transaction(context, transaction, args.raw);
     }
     let runtime = Runtime::new().context("failed to start async runtime")?;
     let tx_hash = runtime.block_on(async {

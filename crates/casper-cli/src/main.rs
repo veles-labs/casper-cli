@@ -94,7 +94,42 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::Cli;
-    use clap::Parser;
+    use clap::{Parser, error::ErrorKind};
+
+    #[test]
+    fn transaction_put_accepts_speculative_execution() {
+        assert!(
+            Cli::try_parse_from([
+                "casper-cli",
+                "transaction",
+                "put",
+                "contract.wasm",
+                "--from",
+                "wallet:account-0",
+                "--speculative",
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn transaction_put_rejects_both_execution_previews() {
+        let result = Cli::try_parse_from([
+            "casper-cli",
+            "transaction",
+            "put",
+            "contract.wasm",
+            "--from",
+            "wallet:account-0",
+            "--simulate",
+            "--speculative",
+        ]);
+        let error = match result {
+            Ok(_) => panic!("simulation modes should conflict"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+    }
 
     #[test]
     fn wallet_password_accepts_setting_or_removing_protection() {

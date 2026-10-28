@@ -230,6 +230,44 @@ fn simulate_transaction(
     Ok(())
 }
 
+fn speculative_execute_transaction(
+    context: &network::ConfigContext,
+    transaction: Transaction,
+    raw: bool,
+) -> Result<()> {
+    let (network_name, rpc_endpoint) = network::active_network_rpc(context)?;
+    let runtime = Runtime::new().context("failed to start async runtime")?;
+    let result = runtime.block_on(async {
+        let client = CasperClient::new(rpc_endpoint);
+        client.speculative_exec_txn(transaction).await
+    })?;
+    let execution = &result.execution_result;
+    let error = execution.error.clone();
+
+    if raw {
+        println!("{}", serde_json::to_string(&result)?);
+    } else {
+        println!("Speculative execution result on {network_name}:");
+        println!("Block: {}", execution.block_hash);
+        println!(
+            "Gas consumed: {} of {}",
+            execution.consumed, execution.limit
+        );
+        println!("Effects: {}", execution.effects.len());
+        println!("Transfers: {}", execution.transfers.len());
+        println!("Messages: {}", execution.messages.len());
+        match &error {
+            Some(error) => eprintln!("Execution failed: {error}"),
+            None => println!("Execution succeeded."),
+        }
+    }
+
+    if let Some(error) = error {
+        bail!("speculative execution failed: {error}");
+    }
+    Ok(())
+}
+
 fn resolve_transfer_target(storage: &StorageConfig, value: &str) -> Result<TransferTarget> {
     let trimmed = value.trim();
     if trimmed.is_empty() {

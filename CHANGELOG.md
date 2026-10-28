@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution errors, gas consumption and cache statistics.
 - Added `wallet password <name>` to set or change password protection for file-backed wallets, with `--unencrypted` to remove it explicitly.
 - Added `wallet derive-vanity` for parallel vanity account derivation scans.
+- Added `--speculative` to transaction put, call, and transfer commands for node-side `speculative_exec_txn` preflight without submission.
 ### Changed
 - Pinned the development toolchain to Rust 1.99.1.
 - Transaction submission now uses the `--from` key's account hash as the default `initiator_addr`
