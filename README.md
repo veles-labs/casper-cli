@@ -15,6 +15,8 @@ See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## Build and run
 
+The checkout uses Rust 1.99.1, as pinned in `rust-toolchain.toml`.
+
 ```bash
 cargo build -p casper-cli
 ./target/debug/casper-cli wallet --help

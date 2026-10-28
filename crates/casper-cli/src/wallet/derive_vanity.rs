@@ -418,7 +418,7 @@ fn search_vanity_matches(
                 }
 
                 if let Ok(previous) =
-                    found.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+                    found.try_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
                         (value < count).then_some(value + 1)
                     })
                 {

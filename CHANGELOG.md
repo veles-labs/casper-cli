@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution errors, gas consumption and cache statistics.
 - Added `wallet derive-vanity` for parallel vanity account derivation scans.
 ### Changed
+- Pinned the development toolchain to Rust 1.99.1.
 - Transaction submission now uses the `--from` key's account hash as the default `initiator_addr`
   for transfers and Wasm/contract calls.
 ### Deprecated
