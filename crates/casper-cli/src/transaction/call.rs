@@ -18,8 +18,8 @@ use super::{
 #[derive(Args)]
 /// Arguments for calling a stored contract.
 pub struct CallArgs {
-    /// Contract hash (contract-/addressable-entity- prefix or raw hex), package hash with --package,
-    /// or named key alias.
+    /// Contract hash (contract-/addressable-entity- prefix or raw hex), package hash
+    /// (package-/contract-package- prefix or raw hex) with --package, or named key alias.
     contract_hash: String,
     /// Contract entry point name.
     entry_point: String,

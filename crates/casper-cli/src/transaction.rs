@@ -2,7 +2,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use casper_execution_engine::engine_state::{EngineConfig, ExecutionEngineV1};
 use casper_types::account::AccountHash;
 use casper_types::bytesrepr::deserialize_from_slice;
-use casper_types::contracts::ContractHash;
+use casper_types::contracts::{ContractHash, ContractPackageHash};
 use casper_types::{
     AddressableEntityHash, CLType, DeployHash, Digest, InitiatorAddr, PackageHash, PublicKey,
     RuntimeArgs, SecretKey, Transaction, TransactionHash, TransactionV1Hash, TransferTarget, URef,
@@ -298,6 +298,9 @@ fn parse_package_hash(value: &str) -> Result<PackageHash> {
     if let Ok(hash) = PackageHash::from_formatted_str(trimmed) {
         return Ok(hash);
     }
+    if let Ok(hash) = ContractPackageHash::from_formatted_str(trimmed) {
+        return Ok(PackageHash::new(hash.value()));
+    }
     let bytes = hex::decode(trimmed).context("invalid package hash hex")?;
     if bytes.len() != PACKAGE_HASH_LEN {
         bail!("package hash must be 32 bytes");
@@ -325,14 +328,16 @@ fn looks_like_contract_hash(value: &str) -> bool {
 
 fn looks_like_package_hash(value: &str) -> bool {
     let trimmed = value.trim();
-    trimmed.starts_with("package-") || looks_like_hex_hash(trimmed)
+    trimmed.starts_with("package-")
+        || trimmed.starts_with("contract-package-")
+        || looks_like_hex_hash(trimmed)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        account_hash_initiator_from_secret_key, parse_contract_hash, parse_package_hash,
-        parse_transaction_hash, parse_transfer_target,
+        account_hash_initiator_from_secret_key, looks_like_package_hash, parse_contract_hash,
+        parse_package_hash, parse_transaction_hash, parse_transfer_target,
     };
     use casper_types::bytesrepr::ToBytes;
     use casper_types::contracts::ContractHash;
@@ -429,6 +434,33 @@ mod tests {
         let formatted = package_hash.to_formatted_string();
         let parsed = parse_package_hash(&formatted).expect("hash");
         assert_eq!(parsed, package_hash);
+    }
+
+    #[test]
+    fn recognizes_package_hash_formats_without_treating_them_as_aliases() {
+        let hex = "74d478128bcaf5fd2306d06cfe103b5629cd6df144f7d27df6deccf21cb7f216";
+        for input in [
+            hex.to_owned(),
+            format!("package-{hex}"),
+            format!("contract-package-{hex}"),
+            format!("  contract-package-{hex}  "),
+        ] {
+            assert!(looks_like_package_hash(&input), "{input}");
+            assert_eq!(parse_package_hash(&input).unwrap().to_string(), hex);
+        }
+        assert!(!looks_like_package_hash("my_package"));
+    }
+
+    #[test]
+    fn malformed_contract_package_hashes_fail_instead_of_becoming_aliases() {
+        for input in [
+            "contract-package-",
+            "contract-package-not-hex",
+            "contract-package-74d47812",
+        ] {
+            assert!(looks_like_package_hash(input), "{input}");
+            assert!(parse_package_hash(input).is_err(), "{input}");
+        }
     }
 
     #[test]

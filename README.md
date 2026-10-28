@@ -405,7 +405,7 @@ casper-cli transaction put path/to/contract.wasm --from mywallet:account-0 --raw
 
 ### transaction call
 
-Calls a stored contract by hash (formatted `contract-`/`addressable-entity-` or raw hex) using the `call` entry point. To call by name, pass the named key alias directly. Use `--package` to interpret the target as a package hash (latest version by default) and `--version` with `--package` to select a specific package version. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. Transactions are signed by the `--from` key and use that key's account hash as the `initiator_addr`. Use `--simulate` to run a local execution engine via the binary port without submitting the transaction.
+Calls a stored contract by hash (formatted `contract-`/`addressable-entity-` or raw hex) using the `call` entry point. To call by name, pass the named key alias directly. Use `--package` to interpret the target as a package hash (`package-`, `contract-package-`, or raw hex; latest version by default) and `--version` with `--package` to select a specific package version. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. Transactions are signed by the `--from` key and use that key's account hash as the `initiator_addr`. Use `--simulate` to run a local execution engine via the binary port without submitting the transaction.
 
 ```bash
 casper-cli transaction call contract-... entry_point --from mywallet:account-0
@@ -414,6 +414,7 @@ casper-cli transaction call contract-... entry_point --from mywallet:account-0 \
   --arg recipient:Key=hash-... --arg note:String="hello"
 casper-cli tx call my_contract entry_point --from mywallet:account-0
 casper-cli tx call package-... entry_point --package --from mywallet:account-0
+casper-cli tx call contract-package-... entry_point --package --from mywallet:account-0 --simulate
 casper-cli tx call my_package entry_point --package --version 3 --from mywallet:account-0
 casper-cli tx call <contract-hash-hex> entry_point --from mywallet:account-0 --simulate
 casper-cli tx call <contract-hash-hex> entry_point --from mywallet:account-0 --raw

@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Deprecated
 ### Removed
 ### Fixed
+- Contract calls with `--package` now recognize `contract-package-` hashes instead of
+  treating them as named key aliases, including during local simulation.
 ### Security
 - Wallet secret replacements now use unique temporary files with restrictive permissions before writing, and password/decrypted plaintext buffers are zeroized on drop.
 
