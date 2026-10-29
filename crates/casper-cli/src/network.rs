@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 const CONFIG_FILE_NAME: &str = "config.toml";
 
 mod list;
+#[cfg(test)]
+mod tests;
 mod use_cmd;
 
 #[derive(Args)]
@@ -41,10 +43,12 @@ struct AppConfig {
 #[derive(Serialize, Deserialize, Clone)]
 struct NetworkEntry {
     chain_name: String,
-    rest: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rest: Option<String>,
     sse: String,
     rpc: String,
-    binary_port: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    binary_port: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -261,30 +265,30 @@ fn config_with_storage(storage: StorageSection) -> AppConfig {
         "devnet".to_string(),
         NetworkEntry {
             chain_name: "casper-dev".to_string(),
-            rest: "http://127.0.0.1:14101".to_string(),
+            rest: Some("http://127.0.0.1:14101".to_string()),
             sse: "http://127.0.0.1:18101/events".to_string(),
             rpc: "http://127.0.0.1:11101/rpc".to_string(),
-            binary_port: "127.0.0.1:28101".to_string(),
+            binary_port: Some("127.0.0.1:28101".to_string()),
         },
     );
     networks.insert(
         "mainnet".to_string(),
         NetworkEntry {
             chain_name: "casper".to_string(),
-            rest: "https://api.veleslabs.xyz/mainnet/".to_string(),
-            sse: "https://api.veleslabs.xyz/mainnet/events".to_string(),
-            rpc: "https://api.veleslabs.xyz/mainnet/rpc".to_string(),
-            binary_port: "wss://api.veleslabs.xyz/mainnet/binary".to_string(),
+            rest: None,
+            sse: "https://node.mainnet.casper.network/events".to_string(),
+            rpc: "https://node.mainnet.casper.network/rpc".to_string(),
+            binary_port: None,
         },
     );
     networks.insert(
         "testnet".to_string(),
         NetworkEntry {
             chain_name: "casper-test".to_string(),
-            rest: "https://api.veleslabs.xyz/testnet/".to_string(),
-            sse: "https://api.veleslabs.xyz/testnet/events".to_string(),
-            rpc: "https://api.veleslabs.xyz/testnet/rpc".to_string(),
-            binary_port: "wss://api.veleslabs.xyz/testnet/binary".to_string(),
+            rest: None,
+            sse: "https://node.testnet.casper.network/events".to_string(),
+            rpc: "https://node.testnet.casper.network/rpc".to_string(),
+            binary_port: None,
         },
     );
 

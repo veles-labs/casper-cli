@@ -29,10 +29,10 @@ pub fn handle(context: &ConfigContext) -> Result<()> {
             Cell::new(&name),
             Cell::new(&entry.chain_name),
             Cell::new(if is_active { "yes" } else { "" }),
-            Cell::new(&entry.rest),
+            Cell::new(entry.rest.as_deref().unwrap_or_default()),
             Cell::new(&entry.sse),
             Cell::new(&entry.rpc),
-            Cell::new(&entry.binary_port),
+            Cell::new(entry.binary_port.as_deref().unwrap_or_default()),
         ]);
     }
 

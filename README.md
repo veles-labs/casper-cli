@@ -279,18 +279,19 @@ binary_port = "127.0.0.1:28101"
 
 [networks.mainnet]
 chain_name = "casper"
-rest = "https://api.veleslabs.xyz/mainnet/"
-sse = "https://api.veleslabs.xyz/mainnet/events"
-rpc = "https://api.veleslabs.xyz/mainnet/rpc"
-binary_port = "wss://api.veleslabs.xyz/mainnet/binary"
+sse = "https://node.mainnet.casper.network/events"
+rpc = "https://node.mainnet.casper.network/rpc"
 
 [networks.testnet]
 chain_name = "casper-test"
-rest = "https://api.veleslabs.xyz/testnet/"
-sse = "https://api.veleslabs.xyz/testnet/events"
-rpc = "https://api.veleslabs.xyz/testnet/rpc"
-binary_port = "wss://api.veleslabs.xyz/testnet/binary"
+sse = "https://node.testnet.casper.network/events"
+rpc = "https://node.testnet.casper.network/rpc"
 ```
+
+The `rest` and `binary_port` fields are optional and may be omitted or left empty.
+The CLI uses `rpc` for network operations, including local simulation; it makes no
+REST or binary-port requests. New mainnet and testnet entries omit these unused
+fields and use the [Casper public nodes](https://docs.casper.network/operators/setup/install-node).
 
 ### network use
 

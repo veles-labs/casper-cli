@@ -23,9 +23,21 @@ pub fn handle(context: &ConfigContext, args: UseArgs) -> Result<()> {
     save_config(config_path, &config)?;
     println!("Active network: {key}");
     println!("Chain name: {}", entry.chain_name);
-    println!("REST: {}", entry.rest);
+    if let Some(rest) = entry
+        .rest
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        println!("REST: {rest}");
+    }
     println!("SSE: {}", entry.sse);
     println!("RPC: {}", entry.rpc);
-    println!("Binary port: {}", entry.binary_port);
+    if let Some(binary_port) = entry
+        .binary_port
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        println!("Binary port: {binary_port}");
+    }
     Ok(())
 }

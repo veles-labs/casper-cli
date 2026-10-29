@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `wallet derive-vanity` for parallel vanity account derivation scans.
 - Added `--speculative` to transaction put, call, and transfer commands for node-side `speculative_exec_txn` preflight without submission.
 ### Changed
+- Default mainnet and testnet RPC/SSE endpoints now use `node.mainnet.casper.network`
+  and `node.testnet.casper.network`. Unused `rest` and `binary_port` fields are optional
+  and omitted from new mainnet/testnet config entries.
 - Pinned the development toolchain to Rust 1.99.1.
 - Transaction submission now uses the `--from` key's account hash as the default `initiator_addr`
   for transfers and Wasm/contract calls.
