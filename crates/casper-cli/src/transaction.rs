@@ -159,9 +159,15 @@ fn simulate_transaction(
 
     let (hits_before, misses_before) = store.cache_stats();
 
-    let result = contract_runtime
-        .execute(block_info, txn)
-        .context("execution")?;
+    let result = {
+        // The engine's casper_print host function writes to stdout. Keep
+        // contract diagnostics on stderr so --raw emits only its JSON result.
+        let _prints = gag::Redirect::stdout(std::io::stderr())
+            .context("redirect simulated contract prints to stderr")?;
+        contract_runtime
+            .execute(block_info, txn)
+            .context("execution")?
+    };
 
     if raw {
         let (hits_after, misses_after) = store.cache_stats();

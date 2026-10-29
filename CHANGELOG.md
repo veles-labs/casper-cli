@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Deprecated
 ### Removed
 ### Fixed
+- Local simulation supports debug Wasm importing `casper_print`, routing contract prints to stderr to preserve JSON output.
 - Contract calls with `--package` now recognize `contract-package-` hashes instead of
   treating them as named key aliases, including during local simulation.
 - Local simulation no longer invokes macOS system-proxy or trust-service discovery for RPC
