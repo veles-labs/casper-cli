@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+## [0.5.0] - 2026-10-29
+
+### Added
+
 - `wallet derive-vanity` searches derivation paths in parallel using prefix, suffix,
   and regular-expression filters over account hashes or public keys. Supports
   configurable worker counts, bounded or unbounded searches, and account name templates.
@@ -42,6 +56,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Transaction V1 transfers, Wasm submissions, and stored contract calls use the
   `--from` key's account hash as `initiator_addr` while still signing with that key.
 - Pinned the development toolchain to Rust 1.99.1.
+- Release tag pushes now publish the crate to crates.io after all platform builds
+  succeed, as well as attaching binaries to the GitHub release.
 
 ### Deprecated
 
@@ -107,7 +123,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial release.
 
-[Unreleased]: https://github.com/veles-labs/casper-cli/compare/0.4.0...HEAD
+[Unreleased]: https://github.com/veles-labs/casper-cli/compare/0.5.0...HEAD
+[0.5.0]: https://github.com/veles-labs/casper-cli/compare/0.4.0...0.5.0
 [0.4.0]: https://github.com/veles-labs/casper-cli/compare/0.3.0...0.4.0
 [0.3.0]: https://github.com/veles-labs/casper-cli/compare/0.2.1...0.3.0
 [0.2.1]: https://github.com/veles-labs/casper-cli/releases/tag/0.2.1

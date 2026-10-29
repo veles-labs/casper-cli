@@ -46,6 +46,13 @@ cargo xtask package
 
 The output is written to `dist/casper-cli-{version}-{target}.tar.gz`.
 
+For a release, update the crate version and lockfile, move the changelog entries
+into a dated version section, and add a fresh `[Unreleased]` section. Commit these
+changes, create a matching version tag without a `v` prefix, and push the commit
+and tag. The release workflow builds Linux and macOS binaries, attaches them to
+the GitHub release, and publishes the crate to crates.io after all platform builds
+succeed.
+
 ## Global options
 
 - `--no-interactive` - Disable prompts when initializing `config.toml` (requires `--keyring` or `--file-storage` if the file is missing).
