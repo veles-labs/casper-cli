@@ -97,6 +97,29 @@ mod tests {
     use clap::{Parser, error::ErrorKind};
 
     #[test]
+    fn unsigned_call_initiators_are_only_allowed_for_local_simulation() {
+        let account = format!("account-hash-{}", "11".repeat(32));
+        let base = ["casper-cli", "transaction", "call", "my_contract", "get"];
+        let mut valid = base.to_vec();
+        valid.extend(["--simulate", "--initiator", &account]);
+        assert!(Cli::try_parse_from(valid.clone()).is_ok());
+        valid.extend(["--from", "wallet:account-0"]);
+        assert!(Cli::try_parse_from(valid).is_err());
+        for suffix in [
+            vec!["--initiator", account.as_str()],
+            vec!["--speculative", "--initiator", account.as_str()],
+            vec!["--simulate"],
+            vec!["--simulate", "--initiator", "not-an-account"],
+        ] {
+            let invocation: Vec<_> = base.into_iter().chain(suffix).collect();
+            assert!(
+                Cli::try_parse_from(&invocation).is_err(),
+                "accepted {invocation:?}"
+            );
+        }
+    }
+
+    #[test]
     fn transaction_put_accepts_speculative_execution() {
         assert!(
             Cli::try_parse_from([

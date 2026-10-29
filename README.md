@@ -408,6 +408,11 @@ casper-cli transaction put path/to/contract.wasm --from mywallet:account-0 --raw
 
 ### transaction call
 
+For unsigned local execution, use `--simulate --initiator account-hash-...`
+instead of `--from`. The account hash selects the simulated caller; no wallet or
+secret key is accessed. This option requires `--simulate` and cannot submit a
+transaction. Add `--raw` to retrieve typed return values as JSON.
+
 Calls a stored contract by hash (formatted `contract-`/`addressable-entity-` or raw hex) using the `call` entry point. To call by name, pass the named key alias directly. Use `--package` to interpret the target as a package hash (`package-`, `contract-package-`, or raw hex; latest version by default) and `--version` with `--package` to select a specific package version. The payment amount is specified in CSPR (default: 2.5 CSPR), with `--gas-price-tolerance` defaulting to 1. Transactions are signed by the `--from` key and use that key's account hash as the `initiator_addr`. Use `--speculative` for node-side speculative execution, or `--simulate` for the local execution engine.
 
 ```bash

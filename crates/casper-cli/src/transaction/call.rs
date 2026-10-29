@@ -1,5 +1,8 @@
 use anyhow::{Context, Result, bail};
-use casper_types::{EntityVersion, PricingMode, Transaction, TransactionRuntimeParams};
+use casper_types::{
+    EntityVersion, InitiatorAddr, PricingMode, Transaction, TransactionRuntimeParams,
+    account::AccountHash,
+};
 use clap::Args;
 use tokio::runtime::Runtime;
 use veles_casper_rust_sdk::TransactionV1Builder;
@@ -30,8 +33,11 @@ pub struct CallArgs {
     #[arg(long, default_value_t = DEFAULT_GAS_PRICE_TOLERANCE)]
     gas_price_tolerance: u8,
     /// Wallet/account reference (<wallet>:<account>) or legacy wallet name.
-    #[arg(long)]
-    from: String,
+    #[arg(long, required_unless_present = "initiator")]
+    from: Option<String>,
+    /// Account hash for an unsigned local simulation; no wallet or secret key is needed.
+    #[arg(long, requires = "simulate", conflicts_with_all = ["from", "speculative"], value_parser = parse_initiator)]
+    initiator: Option<AccountHash>,
     /// Runtime argument in the form name:cltype=value or name=value (hex for Any).
     #[arg(long = "arg", value_name = "NAME[:CLTYPE]=VALUE")]
     args: Vec<String>,
@@ -70,8 +76,19 @@ pub fn handle(
         gas_price_tolerance: args.gas_price_tolerance,
         standard_payment: true,
     };
-    let secret_key = resolve_from_secret_key(storage, &args.from)?;
-    let initiator_addr = account_hash_initiator_from_secret_key(&secret_key);
+    if args.initiator.is_some() && !args.simulate {
+        bail!("--initiator requires --simulate");
+    }
+    let secret_key = args
+        .from
+        .as_deref()
+        .map(|from| resolve_from_secret_key(storage, from))
+        .transpose()?;
+    let initiator_addr = match (secret_key.as_ref(), args.initiator) {
+        (Some(secret), None) => account_hash_initiator_from_secret_key(secret),
+        (None, Some(account)) => InitiatorAddr::AccountHash(account),
+        _ => bail!("provide --from, or --initiator with --simulate"),
+    };
     let chain_name = network::active_network_chain_name(context)?;
     let (network_name, rpc_endpoint) = network::active_network_rpc(context)?;
 
@@ -119,8 +136,11 @@ pub fn handle(
     .with_pricing_mode(pricing_mode)
     .with_chain_name(chain_name)
     .with_initiator_addr(initiator_addr)
-    .with_runtime_args(runtime_args)
-    .with_secret_key(&secret_key);
+    .with_runtime_args(runtime_args);
+    let builder = match secret_key.as_ref() {
+        Some(secret) => builder.with_secret_key(secret),
+        None => builder,
+    };
 
     let tx = builder.build()?;
     let transaction = Transaction::V1(tx);
@@ -142,4 +162,9 @@ pub fn handle(
         println!("Contract call submitted to {network_name}: {tx_hash_bytes:x}");
     }
     Ok(())
+}
+
+fn parse_initiator(value: &str) -> Result<AccountHash, String> {
+    AccountHash::from_formatted_str(value)
+        .map_err(|error| format!("invalid initiator account hash: {error}"))
 }

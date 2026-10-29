@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- Added `transaction call --simulate --initiator <account-hash>` for unsigned local getter calls without a wallet or secret key.
 - Added structured JSON results for `--simulate --raw`, including typed return values,
   execution errors, gas consumption and state-query statistics.
 - Added `wallet password <name>` to set or change password protection for file-backed wallets, with `--unencrypted` to remove it explicitly.
